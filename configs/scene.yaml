@@ -1,0 +1,188 @@
+# Static scene geometry for the MuJoCo SO-ARM101 pick-and-place rig.
+# Lengths in metres, angles in degrees. These are the DR *center* values;
+# configs/randomization.yaml jitters around them per episode.
+#
+# Frame: arm base at origin, table top at z=0, arm reaches toward +x.
+# Left cube = +y, right cube = -y (a fixed labelling for the mode-balance metric).
+
+table:
+  # Gray-blue table top, top surface at z=0. The robot sits at the NEAR edge
+  # (base at x=0) and reaches out across the table toward +x.
+  half_x: 0.30          # spans x in [center_x - half_x, center_x + half_x] = [0, 0.60]
+  half_y: 0.32
+  thickness: 0.04
+  center_x: 0.28        # near edge at the robot base, far edge at x=0.60
+  rgba: [0.32, 0.40, 0.50, 1.0]   # gray-blue
+
+walls:
+  # White walls the cameras see: in FRONT of the robot (far +x edge) and on the
+  # left/right edges. The operator/near side (behind the robot) is open.
+  rgba: [0.92, 0.93, 0.95, 1.0]
+  height: 0.55
+  thickness: 0.02
+  front_x: 0.60         # wall at the far edge, in front of the robot
+  side_y: 0.32          # +/- side walls at the table edges
+
+robot:
+  # The real SO-ARM101 is printed white (motors stay dark). Recolour the
+  # vendored MJCF's printed parts (originally yellow) to this.
+  arm_rgba: [0.90, 0.90, 0.92, 1.0]
+
+cubes:
+  size: 0.015           # half-extent => 3 cm cube
+  mass: 0.020
+  rgba: [0.80, 0.10, 0.10, 1.0]   # red (DR center)
+  friction: [1.0, 0.02, 0.001]
+  z: 0.015              # rests on the table
+  # Sampling regions (metres) for left (+y) and right (-y) cubes. Smaller x =
+  # closer to the arm; the cup sits farther out (see cup.x_range). Widened so a
+  # single "average" reach can no longer land on a cube -> the policy must
+  # localize it from the cameras (breaks the proprioceptive shortcut). A gap is
+  # kept around y=0 so left/right stay distinct and clear of the cup.
+  x_range: [0.16, 0.26]
+  left_y_range: [0.05, 0.16]
+  right_y_range: [-0.16, -0.05]
+  # Per-cube yaw (radians) sampled each episode. A cube has 90-deg symmetry, so
+  # +/-45 deg spans every distinct appearance -> more visual variety without the
+  # rotated footprint overlapping neighbours. The top-down weld grasp is
+  # unaffected by cube yaw.
+  yaw_range: [-0.785, 0.785]
+
+cup:
+  # Procedural wall-ring: bottom disk + n_segments thin box walls.
+  inner_radius: 0.035
+  wall_thickness: 0.005
+  height: 0.070
+  bottom_thickness: 0.005
+  n_segments: 20
+  rgba: [0.10, 0.20, 0.80, 1.0]   # plastic blue (DR center)
+  bottom_mass: 0.030
+  wall_mass: 0.0006     # per segment
+  friction: [1.0, 0.02, 0.001]
+  # Cup placement region (metres). Center-ish, in front of the arm.
+  x_range: [0.30, 0.36]
+  y_range: [-0.04, 0.04]
+
+cameras:
+  width: 640
+  height: 480
+  front:
+    # "Front" on the real rig is a TOP-mounted camera: high above the workspace
+    # centre looking down, so both cubes + the cup stay framed and the arm
+    # enters from the near edge (the back of the table).
+    pos: [0.27, 0.0, 0.58]
+    lookat: [0.27, 0.0, 0.0]
+    fovy: 64
+  wrist:
+    # Community-standard SO101 wrist camera, taken verbatim from gym-soarm
+    # (32x32 UVC module on the hex-nut wrist mount, tilted ~35 deg toward the
+    # fingers). pos/quat are in the gripper body's local frame, which is
+    # byte-identical to our vendored MJCF, so they transfer directly.
+    parent_body: gripper
+    pos: [0.0, 0.074, -0.008]     # +y = left side of the wrist (flip sign for right)
+    quat: [0.965, -0.2579, -0.0206, -0.0421]
+    fovy: 70
+    # Visible white printed hex-nut mount (official SO101 STL). Its pose in the
+    # gripper local frame; tweak to clamp the wrist exactly.
+    mount:
+      pos: [-0.018, 0.0238, -0.0411]
+      quat: [-0.4883, 0.4922, -0.477, 0.5401]
+
+init_pose:
+  # Arm home pose in LeRobot units (degrees for joints 1-5, RANGE_0_100 gripper).
+  # shoulder_pan=0 and wrist_roll=0 -> the arm points straight down the middle
+  # (y=0); the expert returns here between picks.
+  # (Converted from the MuJoCo radians [0, -1.78, 1.49, 1.22, 0, -0.127].)
+  state: [0.0, -102.0, 85.4, 69.9, 0.0, 2.5]
+
+lights:
+  - pos: [0.2, 0.2, 0.8]
+    dir: [-0.1, -0.1, -1.0]
+  - pos: [0.2, -0.2, 0.8]
+    dir: [-0.1, 0.1, -1.0]
+
+grasp:
+  # How a cube is held. "contact" gives the two jaw pads below real frictional
+  # contact with the cubes, so a bad grasp can SLIP -- the failure this repo
+  # exists to fix. "weld" reproduces the sim2real-soarm-benchmark behaviour
+  # (Scene.attach welds the cube to the gripper), where slip is impossible.
+  mode: contact
+
+  # Thin pad geoms glued to the two jaw faces, masked to collide ONLY with
+  # cubes. The rest of the arm stays non-colliding exactly as before, so the
+  # long fingers still dip to table height and never knock the cup. Because the
+  # jaw MESHES are non-colliding, these pads ARE the gripper's entire contact
+  # geometry: their size and friction define the grasp.
+  #
+  # Measured from the vendored MJCF at grip = 19 (gripper local frame, the frame
+  # the tcp / grasp_snug sites live in):
+  #     fixed jaw inner face   x = -0.0079     fingertip reaches z = -0.1044
+  #     moving jaw inner face  x = +0.0217     fingertip reaches z = -0.1061
+  #     jaw gap                29.64 mm  vs a 30 mm cube  ->  0.36 mm squeeze
+  #     jaw half-width in y    ~6.5 mm
+  # and the gap opens fast with the command: 1.9 mm at grip 0, 29.6 at 19,
+  # 37.7 at 25 (cube free), 60.7 at 42. So the gripper channel alone decides
+  # hold-vs-drop within a couple of RANGE_0_100 units -- the sharp, real
+  # sensitivity this project is trying to make the policy respect.
+  #
+  # Depth note: the expert grasps with tcp at world z = 0.020, so the fingertips
+  # reach world z = 0.021 while the cube top is at 0.030. The jaws therefore
+  # pinch only the top ~9 mm of the cube -- a genuinely precarious top-edge
+  # grasp, which is exactly why the real arm slips.
+  # Jaw inner-face x in the gripper frame, measured from the vendored MJCF at
+  # grip = 19 (see scripts/tune_jaw_pads.py, which re-measures and checks these).
+  fixed_face_x: -0.0079
+  moving_face_x: 0.0217
+
+  pad_half_thickness: 0.002    # along the pinch axis (x)
+  pad_half_width: 0.006        # across the fingers (y), matches the jaw width
+  pad_half_height: 0.008       # along the finger length (z)
+  pad_z: -0.096                # pad spans local z [-0.104, -0.088], inside both fingers
+
+  # pad_friction is [sliding, torsional, rolling]. MuJoCo takes the ELEMENT-WISE
+  # MAXIMUM of the two geoms' friction, so the pad value dominates the cube's.
+  #
+  # Measured with the scripted expert (12 seeds, grasp_z = 0.020): friction is a
+  # WEAK knob above ~0.2. The pinch is a 0.4 mm interference held by a position
+  # servo, so the normal force is torque-limited, and even mu = 0.2 gives
+  # mu*N >> the 0.2 N cube weight. Sliding friction only bites below ~0.2.
+  pad_friction: [0.6, 0.05, 0.002]
+  pad_solref: [0.004, 1.0]
+  pad_solimp: [0.95, 0.99, 0.001, 0.5, 2.0]
+
+  # PRIMARY calibration knob: peak gripper servo torque (Nm). The MJCF ships the
+  # STS3215 stall value (3.35), which at the jaw's ~40 mm lever is ~84 N of pinch
+  # -- so much that a geometrically sound grasp could never slip and the sim
+  # would under-report the exact failure this repo studies. The real servo
+  # delivers far less under a sustained squeeze and the printed jaws flex.
+  #
+  # Measured with the scripted expert (which grasps perfectly, so these are an
+  # UPPER bound; the frozen policy's sloppier grasps slip more):
+  #     0.60 Nm -> 0/8 in cup,  2/8 lifted        (grip too weak to lift)
+  #     0.70 Nm -> 6/12 in cup, 8/12 lifted, 2 slips
+  #     0.90 Nm -> 8/12 in cup, 9/12 lifted, 1 slip
+  #     1.10 Nm -> 8/12 in cup, 8/12 lifted, 0 slips
+  #     3.35 Nm -> 8/8  in cup                    (never slips)
+  # So the interesting band is 0.7 - 1.1 Nm. grasprl.sim.calibrate sweeps it
+  # against the FROZEN POLICY to match the real arm's 53% / 30% slip profile.
+  # null keeps the MJCF value.
+  gripper_forcerange: 0.9
+
+  # Acquisition tolerance (m), the knob that separates the two failure modes.
+  #
+  # When the gripper closes with a cube within this radius of the grasp point,
+  # Scene.capture() cancels the ACROSS-THE-JAWS component of the placement error
+  # and hands the cube to the pads; retention is then pure contact physics.
+  # Read the docstring on Scene.capture before touching this: it exists because
+  # the frozen policy places its jaws ~10x less accurately in MuJoCo than on the
+  # real arm, and without it 70% of episodes end as grabbed_nothing no matter
+  # what the contact parameters say.
+  #
+  # Calibrated against the real arm's 83% grasp rate (53% success + 30% slip).
+  # null disables it entirely, giving a fully unassisted contact grasp.
+  capture_radius: 0.030
+  capture_grip_below: 30.0    # only while the gripper is actually closing
+
+  # Gripper command (RANGE_0_100) the pads are positioned for: the expert's
+  # closed value, where the moving jaw just meets the cube's far face.
+  closed_grip: 19.0

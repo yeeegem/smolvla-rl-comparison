@@ -1,0 +1,43 @@
+# On-arm evaluation settings for soarm_eval.run.
+#
+# The policy's own observation/action config (image size, n_action_steps,
+# normalization) lives inside the checkpoint's pretrained_model/ dir, so this
+# file only holds robot/camera/run-protocol settings.
+#
+# Hardware values mirror the sibling diffusion-policy repo's
+# runs/main_480x640/config.yaml so the SmolVLA eval runs on the same arm/cams.
+# Edit robot_port / camera paths if your device ids differ.
+
+dataset:
+  # Used only to read the feature spec + task string (schema identical to the
+  # real yeeegem/redcubes_bluecup). Points at the sim dataset this repo records;
+  # swap to the real dataset if you have it cached.
+  repo_id: sim/sim_redcubes_bluecup
+  root: recordings/sim_redcubes_bluecup
+  fps: 30
+
+eval:
+  num_trials_per_tier: 30
+  max_episode_steps: 1800             # 60 s at 30 fps
+  task: null                          # null => read the instruction from the dataset meta
+
+infer:
+  robot_port: /dev/serial/by-id/usb-1a86_USB_Single_Serial_5B42076683-if00
+  robot_id: valera
+  motor_acceleration: 50              # Feetech firmware ramp; null to leave unchanged
+  init_pose: null                     # null => capture the arm's current pose at start
+  cameras:
+    front:
+      path: /dev/v4l/by-id/usb-046d_HD_Pro_Webcam_C920_111DD85F-video-index0
+      width: 640
+      height: 480
+      fps: 30
+      fourcc: MJPG
+      backend: 200
+    wrist:
+      path: /dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._USB2.0_CAM1_USB2.0_CAM1-video-index0
+      width: 640
+      height: 480
+      fps: 30
+      fourcc: MJPG
+      backend: 200

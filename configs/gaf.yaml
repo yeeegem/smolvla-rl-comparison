@@ -1,0 +1,52 @@
+# Arm B: Guided Action Flow (arXiv 2607.02092v1) on the frozen SmolVLA policy.
+#
+# Nothing here changes the policy. The critic is trained once on rollouts of the
+# frozen policy, then used only through its gradient during sampling.
+
+critic:
+  # Paper defaults: a 4-layer MLP of width 768, ensemble of 3, 30 epochs.
+  hidden: 768
+  depth: 4
+  ensemble: 3
+  epochs: 30
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  batch_size: 256
+  # Discount of the sparse success-to-go target, Eq. (4). Matches ppo.gamma so
+  # the two arms' value functions are on the same time scale.
+  gamma: 0.99
+
+  # "state" is the paper's compact policy-side feature. "state+pooled" also feeds
+  # the masked mean-pooled VLM prefix -- free (the sampler computes it anyway),
+  # the same feature PPO's value head reads (so both arms get value functions of
+  # equal power), and the paper's own stated bottleneck. Grasp slip is visible in
+  # the wrist camera and invisible in six joint angles, so the default is the
+  # richer one; flip to "state" for the paper-faithful ablation.
+  features: state+pooled
+
+  # Single task, single instruction => e_tau is constant and carries no
+  # information. Plumbed for parity with the paper's multi-family critics.
+  use_task_feature: false
+
+  action_dim: 6     # physical dims only; SmolVLA's 26 padding dims are excluded
+  horizon: 10       # H, the chunk length scored; matches env n_exec
+
+guidance:
+  # beta DIVIDES the gradient, so smaller = stronger. The paper reports this as
+  # the sensitive knob: too strong and guidance overrules an already-competent
+  # base policy and turns successes into regressions.
+  beta: 2.0
+  clip_norm: 1.0    # c, per-sample gradient norm cap, Eq. (7)
+  alpha: 10.0       # uncertainty scale in the disagreement gate, Eq. (8)
+  min_gate: 0.1     # m_min: keep a little guidance alive even when unsure
+  enabled: true
+
+sweep:
+  # scripts/sweep_gaf.sh searches this grid on the VALIDATION seed range only.
+  # The locked winner is then reported once on the held-out range. Re-tuning on
+  # held-out seeds would turn the test set into a second validation set and
+  # inflate the result -- the paper's central methodological warning, where a
+  # +10.0 pp validation gain became +2.5 pp held out.
+  beta: [1.0, 2.0, 4.0, 8.0]
+  alpha: [0.0, 10.0]
+  clip_norm: [0.5, 1.0]

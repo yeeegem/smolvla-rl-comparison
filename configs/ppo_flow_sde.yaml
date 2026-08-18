@@ -1,0 +1,69 @@
+# Arm A: Flow-SDE PPO on the frozen-then-finetuned SmolVLA policy.
+#
+# Sized for the "fast iteration" budget on a 16 GB RTX A5000 Laptop:
+# ~1280 control ticks per update at ~25 s/update => 400k ticks is ~2.2 h.
+# Raise total_env_steps (or pass --total-env-steps) for a longer run.
+
+sampler:
+  # K denoise steps during RL. Fewer steps = a shorter chain to backprop and
+  # fewer log-prob terms; evaluation still uses the checkpoint's native 10.
+  num_steps: 4
+  # Std of the exploration noise, g(t) = noise_scale * t. Exploration is not
+  # free: in the source repo the best SDE setting scored 0.30 against 0.45 for
+  # the deterministic ODE, so this is deliberately small. Probe it with
+  # scripts/measure_noise_scale.py before changing it.
+  noise_scale: 0.2
+  learn_noise: false
+  # Score only the executed block (n_exec x 6) rather than the whole padded
+  # 50 x 32 latent. The unexecuted remainder is fixed by chain replay, so the
+  # ratio stays a valid importance weight and sheds most of its variance.
+  score_all_coords: false
+  expert_layers_trained: null   # null = the whole action expert
+
+env:
+  # 4, not 8: SmolVLA plus a training minibatch needs ~5 GB and this laptop GPU
+  # has ~13.5 GB free in practice.
+  n_envs: 4
+  n_exec: 10            # actions executed per decision, out of the 50-chunk
+  max_ticks: 300        # the scripted demos run 174 ticks
+  domain_randomize: true
+
+reward:
+  # gamma is deliberately absent: it is copied from ppo.gamma below, and
+  # load_run_config() raises if this file sets it. Setting it independently
+  # would break the policy-invariance of the potential-based shaping.
+  progress_weight: 3.0
+  distance_scale: 0.10
+  success_bonus: 100.0
+  # The term that makes this run about grasp stability: a lifted-then-dropped
+  # cube must be worse than never lifting one. Raised from the source repo's 5.0
+  # because slip is the failure being targeted, while success_bonus still
+  # dominates so the policy cannot farm the penalty by refusing to grasp.
+  drop_penalty: 15.0
+  time_penalty: 0.01
+  knock_penalty: 5.0
+
+ppo:
+  total_env_steps: 400000
+  rollout_steps: 32
+  epochs: 2
+  minibatch_size: 8
+  grad_accum: 4
+  lr: 1.0e-5
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_coef: 0.1
+  vf_coef: 0.5
+  # With learn_noise=false the entropy depends only on the fixed std, so the
+  # bonus has no gradient. Kept at 0 and logged only as a collapse detector.
+  ent_coef: 0.0
+  max_grad_norm: 1.0
+  # Per scored coordinate. A stock 0.01 threshold on a summed 60-coordinate KL
+  # early-stopped nearly every update after ~5 of 64 minibatches.
+  target_kl: 0.015
+  kl_coef: 5.0
+  value_head_lr: 3.0e-4
+  normalize_advantages: true
+  seed: 0
+  log_every: 1
+  save_every: 10
