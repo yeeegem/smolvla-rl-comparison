@@ -36,13 +36,23 @@ class Actor:
 
     def __init__(self, checkpoint: str | Path, device: torch.device, task: str,
                  n_exec: int = 10, critic_dir: str | Path | None = None,
-                 guidance=None, seed: int = 0, num_steps: int | None = None):
+                 guidance=None, seed: int = 0, num_steps: int | None = None,
+                 stochastic: bool = False, noise_scale: float = 0.2):
         self.device = device
         self.task = task
         self.n_exec = n_exec
+        # `stochastic` scores the sampler PPO actually explores with, rather than
+        # the deterministic one it is evaluated with. The gap between the two is
+        # the exploration tax, and it has to be measured rather than assumed: at
+        # noise_scale 0.2 / K=4 it turned out to cost the entire task (0% success
+        # against the ODE's 10%), which silently starved PPO of any positive
+        # reward and taught it to stop grasping.
+        self.stochastic = stochastic
         self.policy, self.pre, self.post = load_smolvla(checkpoint, device)
         self.sampler = FlowSDESampler(
-            self.policy, FlowSDEConfig(num_steps=num_steps), n_exec=n_exec).to(device)
+            self.policy,
+            FlowSDEConfig(num_steps=num_steps, noise_scale=noise_scale),
+            n_exec=n_exec).to(device)
         self.generator = torch.Generator(device=device)
         self.generator.manual_seed(500_000 + 7919 * seed)
 
@@ -64,7 +74,9 @@ class Actor:
         """``(B, n_exec, 6)`` actions in LeRobot calibrated units."""
         batch = observations_to_batch(observations, self.task, self.pre, self.device)
         prefix = self.sampler.encode(batch)
-        if self.guided is None:
+        if self.guided is None and self.stochastic:
+            latent = self.sampler.rollout(prefix, generator=self.generator).actions
+        elif self.guided is None:
             latent = self.sampler.sample_ode(prefix, generator=self.generator)
         else:
             state = self.policy.prepare_state(batch)
@@ -78,7 +90,8 @@ class Actor:
 
 def build_actor(method: str, checkpoint: str | Path, device: torch.device, task: str,
                 n_exec: int = 10, critic_dir: str | Path | None = None,
-                guidance=None, seed: int = 0) -> Actor:
+                guidance=None, seed: int = 0, stochastic: bool = False,
+                noise_scale: float = 0.2, num_steps: int | None = None) -> Actor:
     """Construct the actor for one arm of the comparison.
 
     ``gaf`` deliberately takes the **base** checkpoint: the whole claim of the
@@ -93,4 +106,5 @@ def build_actor(method: str, checkpoint: str | Path, device: torch.device, task:
         raise ValueError(f"method={method!r} does not use a critic; drop --critic")
     return Actor(checkpoint, device, task, n_exec=n_exec,
                  critic_dir=critic_dir if method == "gaf" else None,
-                 guidance=guidance, seed=seed)
+                 guidance=guidance, seed=seed, stochastic=stochastic,
+                 noise_scale=noise_scale, num_steps=num_steps)

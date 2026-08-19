@@ -277,3 +277,97 @@ def test_noise_schedule_vanishes_at_the_end(rig):
     assert stds == sorted(stds, reverse=True)
     assert stds[-1] < stds[0] / 2
     assert np.all(np.isfinite(stds))
+
+
+@gpu_only
+def test_batch_shape_changes_the_forward_pass(rig):
+    """Document the hazard PPO's update loop is built around.
+
+    A rollout replayed at a different batch size does NOT reproduce its own
+    log-probability. cuBLAS picks kernels by shape, and the resulting ~1e-3
+    difference in predicted velocity moves the summed log-probability by about a
+    nat, because the per-step std shrinks toward the end of the chain (0.003 at
+    t=0.1 with noise_scale=0.1).
+
+    That matters because PPO collects at batch = n_envs and updates at batch =
+    minibatch_size. Trusting the stored log-probability as the PPO denominator
+    gave approx_kl 1.7e-2 on the first minibatch of every update, before any
+    weight had changed, against a target_kl of 0.015: the early-stop fired on a
+    numerical artifact and 391 of 391 updates were cut short, applying 14% of
+    the intended gradient work and moving the policy by 1.2e-4 relative in
+    2.6 h.
+
+    ``Trainer.update`` therefore recomputes behaviour log-probabilities under
+    its own forward conditions. If this test ever starts failing, the underlying
+    sensitivity has gone away and that recomputation could be dropped.
+    """
+    policy, batch, device = rig
+    sampler = _sampler(policy, num_steps=10, noise_scale=0.1)
+
+    with torch.no_grad():
+        prefix = sampler.encode(batch)
+        gen = torch.Generator(device=device)
+        gen.manual_seed(0)
+        collected = sampler.rollout(prefix, generator=gen)
+
+    def replay_kl(*, grad: bool, repeat: int):
+        def tile(v):
+            if torch.is_tensor(v):
+                return v.repeat(repeat, *([1] * (v.dim() - 1)))
+            return v * repeat if isinstance(v, list) else v
+
+        b = {k: tile(v) for k, v in batch.items()}
+        c = collected.chain.repeat(repeat, 1, 1, 1)
+        with torch.no_grad():
+            pfx = sampler.encode(b)
+        with torch.enable_grad() if grad else torch.no_grad():
+            out = sampler.rollout(pfx, chain=c)
+        lp = out.log_prob[: collected.log_prob.shape[0]].detach()
+        log_ratio = lp - collected.log_prob
+        ratio = log_ratio.exp()
+        return float((((ratio - 1) - log_ratio).mean() / sampler.n_scored).abs())
+
+    same_no_grad = replay_kl(grad=False, repeat=1)
+    same_grad = replay_kl(grad=True, repeat=1)
+    bigger = replay_kl(grad=True, repeat=4)
+
+    # Identical shapes reproduce the log-probability exactly, with or without
+    # autograd. So the problem is the shape, not the grad mode.
+    assert same_no_grad < 1e-9, same_no_grad
+    assert same_grad < 1e-9, same_grad
+    # A different batch size does not, and by enough to matter.
+    assert bigger > 1e-4, (
+        f"batch-shape sensitivity is gone ({bigger:.2e}); Trainer.update's "
+        f"behaviour-log-prob recomputation can be simplified")
+
+
+@gpu_only
+def test_recomputed_behaviour_logprob_gives_a_unit_ratio(rig):
+    """The property Trainer.update actually relies on.
+
+    Recomputing the behaviour log-probability with the same code path, batch
+    shape and parameters that the update will use makes the PPO importance ratio
+    exactly 1 before the first optimizer step, whatever the batch shapes are. It
+    is what stops the KL early-stop firing on a numerical artifact.
+    """
+    policy, batch, device = rig
+    sampler = _sampler(policy, num_steps=10, noise_scale=0.1)
+
+    with torch.no_grad():
+        prefix = sampler.encode(batch)
+        gen = torch.Generator(device=device)
+        gen.manual_seed(0)
+        chain = sampler.rollout(prefix, generator=gen).chain
+
+    # Exactly what update() does: one no_grad pass to establish the denominator,
+    # then the real pass, both on the same minibatch.
+    with torch.no_grad():
+        pfx = sampler.encode(batch)
+        behaviour_lp = sampler.rollout(pfx, chain=chain).log_prob
+    out = sampler.rollout(pfx, chain=chain)
+
+    log_ratio = out.log_prob - behaviour_lp
+    ratio = log_ratio.exp()
+    approx_kl = float((((ratio - 1) - log_ratio).mean() / sampler.n_scored).abs())
+    assert torch.allclose(ratio, torch.ones_like(ratio)), ratio
+    assert approx_kl < 1e-9, approx_kl

@@ -295,8 +295,11 @@ class Trainer:
         n = len(buf)
         adv_t = torch.as_tensor(advantages, dtype=torch.float32, device=self.device)
         ret_t = torch.as_tensor(returns, dtype=torch.float32, device=self.device)
-        old_lp = torch.as_tensor(np.asarray(buf.log_prob), dtype=torch.float32,
-                                 device=self.device)
+        # buf.log_prob (from collection) is deliberately NOT used as the PPO
+        # denominator; see the note below on batch-shape sensitivity. It is kept
+        # only as a diagnostic of how far the two forward paths disagree.
+        collected_lp = torch.as_tensor(np.asarray(buf.log_prob), dtype=torch.float32,
+                                       device=self.device)
         chains = torch.as_tensor(np.asarray(buf.chain), dtype=torch.float32)
         if cfg.normalize_advantages:
             adv_t = (adv_t - adv_t.mean()) / (adv_t.std() + 1e-8)
@@ -305,14 +308,51 @@ class Trainer:
         params = [p for g in self.optimizer.param_groups for p in g["params"]]
         logs = {"pg_loss": 0.0, "value_loss": 0.0, "entropy": 0.0, "approx_kl": 0.0,
                 "kl_reference": 0.0, "clip_fraction": 0.0}
+        # Sanity probe. On the very first minibatch of an update no optimizer
+        # step has run yet, so the policy is bit-identical to the one that
+        # collected the data: the importance ratio must be exactly 1 and this
+        # must be ~0. If it is not, the replay is not reproducing collection
+        # (a prefix, chain or indexing mismatch) and every ratio in the update
+        # is meaningless -- which looks exactly like a leash that is too tight.
+        first_kl = float("nan")
         n_batches = 0
         stop = False
         self.optimizer.zero_grad(set_to_none=True)
 
+        # One fixed partition for the whole update, so the behaviour log-probs
+        # below are recomputed on exactly the batches the epochs will use.
+        order = np.random.permutation(n)
+        parts = [order[s:s + cfg.minibatch_size] for s in range(0, n, cfg.minibatch_size)]
+
+        # Recompute the behaviour log-probabilities under the update's OWN
+        # forward conditions instead of trusting the ones stored at collection.
+        #
+        # Collection runs at batch = n_envs; the update runs at batch =
+        # minibatch_size. Different shapes make cuBLAS pick different kernels,
+        # and the resulting ~1e-3 difference in the predicted velocity is enough
+        # to move the summed log-probability by about a nat, because the
+        # per-step std shrinks toward the end of the chain (at t=0.1 with
+        # noise_scale=0.1 it is only 0.003). Measured on this setup: approx_kl
+        # 1.7e-2 on the very first minibatch, before any weight had changed,
+        # against a target_kl of 0.015. The early-stop therefore fired on a
+        # numerical artifact, cutting 391 of 391 updates short and applying 14%
+        # of the intended gradient work.
+        #
+        # Recomputing here makes the ratio exactly 1 at the start of the update
+        # by construction, whatever the batch shapes are. Pinned by
+        # tests/test_flow_sde.py::test_replay_survives_the_conditions_training_actually_uses.
+        behaviour_lp, gaps = [], []
+        with torch.no_grad():
+            for idx in parts:
+                b = observations_to_batch(buf.observations(idx),
+                                          self.task, self.pre, self.device)
+                pfx = self.sampler.encode(b)
+                behaviour_lp.append(
+                    self.sampler.rollout(pfx, chain=chains[idx].to(self.device)).log_prob)
+                gaps.append((behaviour_lp[-1] - collected_lp[idx]).abs().mean().item())
+
         for _ in range(cfg.epochs):
-            order = np.random.permutation(n)
-            for start in range(0, n, cfg.minibatch_size):
-                idx = order[start:start + cfg.minibatch_size]
+            for part_i, idx in enumerate(parts):
                 batch = observations_to_batch(buf.observations(idx),
                                               self.task, self.pre, self.device)
                 chain = chains[idx].to(self.device)
@@ -325,7 +365,7 @@ class Trainer:
                 # Ratio per inner denoise step; the outer advantage is shared
                 # across the K inner steps of one decision.
                 mb_adv = adv_t[idx].unsqueeze(1).expand_as(out.log_prob)
-                log_ratio = out.log_prob - old_lp[idx]
+                log_ratio = out.log_prob - behaviour_lp[part_i]
                 ratio = log_ratio.exp()
                 pg = torch.max(
                     -mb_adv * ratio,
@@ -362,6 +402,8 @@ class Trainer:
                     # construction, so a spike is unambiguous. Per coordinate.
                     approx_kl = (((ratio - 1) - log_ratio).mean() / n_scored).item()
                     clip_frac = ((ratio - 1).abs() > cfg.clip_coef).float().mean().item()
+                if n_batches == 1:
+                    first_kl = approx_kl
                 logs["pg_loss"] += pg.item()
                 logs["value_loss"] += v_loss.item()
                 logs["entropy"] += entropy.item()
@@ -384,6 +426,12 @@ class Trainer:
         out_logs = {k: v / max(n_batches, 1) for k, v in logs.items()}
         out_logs["minibatches"] = n_batches
         out_logs["early_stopped"] = int(stop)
+        out_logs["first_minibatch_kl"] = first_kl
+        # How far the collection-time forward and the update-time forward
+        # disagree, in nats of summed log-probability. Not used in the loss;
+        # logged so the artifact that once throttled this run stays visible.
+        out_logs["replay_lp_gap"] = float(np.mean(gaps)) if gaps else float("nan")
+        out_logs["optimizer_steps"] = n_batches // cfg.grad_accum
         return out_logs
 
     # -- checkpointing -------------------------------------------------------
@@ -508,7 +556,9 @@ def train(
                 f"| slip {row['slip_rate']:.2f} | lift {row['lift_rate']:.2f} "
                 f"| pg {stats['pg_loss']:+.4f} "
                 f"| v {stats['value_loss']:7.3f} | kl_ref {stats['kl_reference']:.4f} "
-                f"| kl {stats['approx_kl']:.4f} | clip {stats['clip_fraction']:.2f} "
+                f"| kl {stats['approx_kl']:.4f} | kl0 {stats['first_minibatch_kl']:.5f} "
+                f"| lpgap {stats['replay_lp_gap']:.2f} "
+                f"| mb {stats['minibatches']:>2} | clip {stats['clip_fraction']:.2f} "
                 f"| {row['steps_per_sec']:.1f} ticks/s",
                 flush=True,
             )

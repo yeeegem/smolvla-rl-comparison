@@ -5,14 +5,24 @@
 # Raise total_env_steps (or pass --total-env-steps) for a longer run.
 
 sampler:
-  # K denoise steps during RL. Fewer steps = a shorter chain to backprop and
-  # fewer log-prob terms; evaluation still uses the checkpoint's native 10.
-  num_steps: 4
+  # K denoise steps during RL. Fewer steps means a shorter chain to backprop and
+  # fewer log-prob terms, but K=4 was measured to destroy the task outright:
+  # 4 Euler steps for a chain the checkpoint was trained to integrate in 10 gave
+  # 0 successes in 72 episodes, so PPO had no positive reward at all and learned
+  # to stop grasping. Matched to the checkpoint's native 10, the tax is small.
+  num_steps: 10
   # Std of the exploration noise, g(t) = noise_scale * t. Exploration is not
-  # free: in the source repo the best SDE setting scored 0.30 against 0.45 for
-  # the deterministic ODE, so this is deliberately small. Probe it with
-  # scripts/measure_noise_scale.py before changing it.
-  noise_scale: 0.2
+  # free, and the cost has to be MEASURED, not assumed. Probe it with
+  #     python -m grasprl.eval.evaluate --stochastic --noise-scale X --num-steps K
+  # which scores the frozen policy with the sampler PPO explores with.
+  #
+  # Measured on this checkpoint (100 episodes, validation split):
+  #     deterministic ODE      success 9.8%   acquisition 32%   retention 31%
+  #     noise 0.1, K=10        success 7.0%   acquisition 31%   retention 23%
+  #     noise 0.2, K=4         success 0.0%   -- starves PPO completely
+  # 0.1 keeps acquisition intact and costs only some retention, which is the
+  # right shape of tax: the policy can still find rewards to learn from.
+  noise_scale: 0.1
   learn_noise: false
   # Score only the executed block (n_exec x 6) rather than the whole padded
   # 50 x 32 latent. The unexecuted remainder is fixed by chain replay, so the
@@ -35,16 +45,39 @@ reward:
   progress_weight: 3.0
   distance_scale: 0.10
   success_bonus: 100.0
-  # The term that makes this run about grasp stability: a lifted-then-dropped
-  # cube must be worse than never lifting one. Raised from the source repo's 5.0
-  # because slip is the failure being targeted, while success_bonus still
-  # dominates so the policy cannot farm the penalty by refusing to grasp.
-  drop_penalty: 15.0
+  # A lifted-then-dropped cube should be worse than never lifting one, but only
+  # slightly. This was 15.0 and it collapsed the first run: PPO drove the lift
+  # rate from 0.50 to 0.00 in 17 updates and never scored a single success.
+  #
+  # The arithmetic that broke it. Shaping here is potential-based, so over an
+  # episode that grasps, carries and drops, the shaping return TELESCOPES to
+  # about zero -- it does not pay out the ~1.5 of carry progress. So the entire
+  # return of a failed grasp is -drop_penalty:
+  #
+  #     EV(attempt) = retention*success_bonus - (1-retention)*drop_penalty
+  #
+  # and under the SDE exploration sampler retention measured 0.00, not the 0.31
+  # the deterministic baseline shows. At retention 0, EV(attempt) = -15 against
+  # EV(never grasp) = 0, so refusing to grasp is optimal and PPO correctly
+  # learned it. The penalty has to stay small enough that exploring a grasp is
+  # not strictly punished while the policy is still bad at holding on:
+  #
+  #     retention 0.00 -> EV = -2.0   (roughly neutral, attempts survive)
+  #     retention 0.10 -> EV = +8.2
+  #     retention 0.31 -> EV = +29.6
+  #
+  # success_bonus already supplies all the pressure to hold on; drop_penalty is
+  # only a tie-breaker between "dropped it" and "never picked it up".
+  drop_penalty: 2.0
   time_penalty: 0.01
   knock_penalty: 5.0
 
 ppo:
-  total_env_steps: 400000
+  # K=10 makes each denoising chain longer than K=4, so throughput drops; the
+  # first few log lines report the actual ticks/s. At ~25 ticks/s this is about
+  # 5.5 h. Checkpoints are written every 10 updates and the run can be stopped at
+  # any point, so this is an upper bound rather than a commitment.
+  total_env_steps: 500000
   rollout_steps: 32
   epochs: 2
   minibatch_size: 8
@@ -58,10 +91,32 @@ ppo:
   # bonus has no gradient. Kept at 0 and logged only as a collapse detector.
   ent_coef: 0.0
   max_grad_norm: 1.0
-  # Per scored coordinate. A stock 0.01 threshold on a summed 60-coordinate KL
-  # early-stopped nearly every update after ~5 of 64 minibatches.
-  target_kl: 0.015
-  kl_coef: 5.0
+  # Per scored coordinate, both of them. These were inherited from the source
+  # repo and DO NOT transfer: at 0.015 / 5.0 the first 500k-tick run here
+  # early-stopped 391 of 391 updates after a median of 5 of 32 minibatches,
+  # applied ~433 optimizer steps in 2.6 h, and moved the policy weights by
+  # 1.2e-4 relative -- an unmeasurable change. The curve was flat because the
+  # leash never let PPO move, not because there was nothing to learn.
+  #
+  # Measured on that run:
+  #   kl_reference settled at 0.064, over 4x target_kl, so the early-stop fired
+  #     on essentially every update;
+  #   kl_coef * kl_reference = 0.32 against |pg_loss| = 0.12, so the loss was
+  #     2.6x more about staying near the imitation policy than about the task.
+  #
+  # ROOT CAUSE, found later: most of that drift was not drift at all. The PPO
+  # denominator was the log-probability stored at COLLECTION (batch = n_envs)
+  # while the update recomputed it at batch = minibatch_size, and the two
+  # forwards disagree by ~1.7e-2 of approx_kl purely because cuBLAS selects
+  # kernels by shape. Trainer.update now recomputes the behaviour log-probs
+  # under its own conditions, so the ratio is exactly 1 before the first step.
+  #
+  # With the artifact gone, target_kl means what it is supposed to mean again.
+  # 0.03 is kept rather than the original 0.015 because the honest per-update
+  # drift here is not yet known; watch `kl0` (must be ~0) and `mb` (should reach
+  # 32) in the log and tighten it if updates start running away.
+  target_kl: 0.03
+  kl_coef: 1.0
   value_head_lr: 3.0e-4
   normalize_advantages: true
   seed: 0

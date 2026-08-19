@@ -7,9 +7,19 @@ expensive way -- with a raw progress bonus, episode return climbed while success
 *halved*, because the policy farmed the shaping instead of finishing the task.
 
 Event terms (slip, success, time) sit outside the potential, so they do change
-the objective. That is deliberate and is the point of this repo: ``drop_penalty``
-is what tells PPO that a lifted-then-dropped cube is worse than never lifting it,
-which is precisely the distinction the base policy fails to make.
+the objective. That is deliberate: ``drop_penalty`` tells PPO that a
+lifted-then-dropped cube is worse than never lifting one.
+
+It has to stay **small**, though, and that is not obvious. Because the shaping is
+potential-based it telescopes over an episode, so a grasp that is carried most of
+the way and then dropped earns essentially no shaping to offset the penalty --
+the penalty is the entire return. Size it against ``success_bonus`` and the
+*exploration-time* retention rate, not the evaluation-time one:
+
+    EV(attempt) = retention * success_bonus - (1 - retention) * drop_penalty
+
+If that is negative at the retention the policy actually achieves while
+exploring, the optimal policy is to stop grasping, and PPO will find it.
 """
 
 from __future__ import annotations
@@ -34,7 +44,12 @@ class RewardConfig:
     progress_weight: float = 3.0
     distance_scale: float = 0.10   # m; e-folding distance of the reach/carry terms
     success_bonus: float = 100.0
-    drop_penalty: float = 15.0     # a slip, the failure this repo targets
+    # Small on purpose. Shaping is potential-based and telescopes to ~0 over a
+    # grasp-carry-drop episode, so this IS the whole return of a failed grasp.
+    # At 15.0 it drove the lift rate to zero: with exploration-time retention at
+    # 0.00, attempting a grasp was worth -15 against 0 for never trying. See
+    # configs/ppo_flow_sde.yaml for the arithmetic.
+    drop_penalty: float = 2.0      # a slip, the failure this repo targets
     time_penalty: float = 0.01     # per control tick
     knock_penalty: float = 5.0
 

@@ -81,13 +81,22 @@ def evaluate(
     results_dir: str = "results",
     quiet: bool = False,
     progress_every: int = 20,
+    stochastic: bool = False,
+    noise_scale: float = 0.2,
+    num_steps: int | None = None,
 ) -> dict:
     if split not in SPLIT_BASE:
         raise ValueError(f"split must be one of {sorted(SPLIT_BASE)}, got {split!r}")
     label = label or method
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     actor = build_actor(method, checkpoint, device, task, n_exec=n_exec,
-                        critic_dir=critic_dir, guidance=guidance, seed=seeds[0])
+                        critic_dir=critic_dir, guidance=guidance, seed=seeds[0],
+                        stochastic=stochastic, noise_scale=noise_scale,
+                        num_steps=num_steps)
+    if stochastic and not quiet:
+        print(f"SDE sampler probe: noise_scale={noise_scale} "
+              f"num_steps={num_steps or actor.sampler.num_steps} "
+              f"(this is what PPO explores with, not what it is scored with)")
 
     per_seed = []
     for seed in seeds:
@@ -265,6 +274,15 @@ def main(argv=None):
     p.add_argument("--results-dir", default="results")
     p.add_argument("--progress-every", type=int, default=20,
                    help="print a running tally every N episodes (0 to disable)")
+    p.add_argument("--stochastic", action="store_true",
+                   help="score the SDE sampler PPO explores with, instead of the "
+                        "deterministic ODE it is evaluated with. The gap is the "
+                        "exploration tax; if it drives success to zero, PPO has no "
+                        "positive reward to learn from.")
+    p.add_argument("--noise-scale", type=float, default=0.2,
+                   help="SDE exploration noise, with --stochastic")
+    p.add_argument("--num-steps", type=int, default=None,
+                   help="flow steps (default: the checkpoint's own, 10)")
     a = p.parse_args(argv)
 
     guidance = None
@@ -283,7 +301,8 @@ def main(argv=None):
              n_envs=a.n_envs, n_exec=a.n_exec, max_ticks=a.max_ticks,
              domain_randomize=not a.no_domain_randomize, critic_dir=a.critic,
              guidance=guidance, results_dir=a.results_dir,
-             progress_every=a.progress_every)
+             progress_every=a.progress_every, stochastic=a.stochastic,
+             noise_scale=a.noise_scale, num_steps=a.num_steps)
 
 
 if __name__ == "__main__":

@@ -35,10 +35,10 @@ guidance:
   # beta DIVIDES the gradient, so smaller = stronger. The paper reports this as
   # the sensitive knob: too strong and guidance overrules an already-competent
   # base policy and turns successes into regressions.
-  beta: 2.0
-  clip_norm: 1.0    # c, per-sample gradient norm cap, Eq. (7)
-  alpha: 10.0       # uncertainty scale in the disagreement gate, Eq. (8)
-  min_gate: 0.1     # m_min: keep a little guidance alive even when unsure
+  beta: 8.0
+  clip_norm: 0.5    # c, per-sample gradient norm cap, Eq. (7)
+  alpha: 0.0    # uncertainty scale in the disagreement gate, Eq. (8)
+  min_gate: 0.1    # m_min: keep a little guidance alive even when unsure
   enabled: true
 
 sweep:
