@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Tune the sim's grasp physics until the FROZEN policy fails the way it really
-# does, then freeze the result. Run this once, before either RL method: both are
-# scored in this sim, so re-calibrating after seeing a result would invalidate
-# the comparison.
+# Choose the sim's grasp parameters and freeze them. Cells are scored on fitness
+# as a TESTBED for comparing the two RL methods (headroom x sample yield), not on
+# resemblance to the real arm, which is printed as reference only. Run this once,
+# before either RL method: both are scored in this sim, so re-running it after
+# seeing a result would invalidate the comparison.
 set -euo pipefail
 export MUJOCO_GL=egl PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 uv run python -m grasprl.sim.calibrate \

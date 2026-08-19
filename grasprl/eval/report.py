@@ -17,6 +17,8 @@ import argparse
 import json
 from pathlib import Path
 
+from grasprl.eval.stats import required_trials, two_proportion_test
+
 ARMS = [("base", "frozen SmolVLA (baseline)"),
         ("ppo", "+ Flow-SDE PPO (weights updated)"),
         ("gaf", "+ Guided Action Flow (weights frozen)")]
@@ -27,10 +29,26 @@ def _load(path: Path):
 
 
 def sim_table(results_dir: Path) -> str:
-    header = ("| arm | success | grasp_slip | grabbed_nothing | missed_cup | lift rate | "
-              "\\|P(left)-0.5\\| |")
+    """The head-to-head table, led by retention rather than success rate.
+
+    Calibration showed the two stages of the task are calibrated to very
+    different degrees: retention lands near the real arm's 0.64, while
+    acquisition sits at 0.34 against 0.83. Retention is both the grasp-slip
+    question and the half the sim gets closest to right, so it is the column to
+    read. Acquisition is reported beside it because a method can move success
+    rate purely by attempting more grasps, which in this sim would be an
+    improvement against an artifact.
+
+    Every rate carries a 95% Wilson interval, and each method is compared to the
+    baseline with a two-proportion test. Point estimates alone are not readable
+    here: retention is measured on only the episodes that lifted, so a 15-point
+    swing at 200 episodes is still inside the noise.
+    """
+    header = ("| arm | **retention** (95% CI) | vs baseline | acquisition | success | "
+              "grasp_slip | grabbed_nothing |")
     rows = [header, "|---|---|---|---|---|---|---|"]
     any_row = False
+    base = _load(results_dir / "eval_base.json")
     for label, name in ARMS:
         d = _load(results_dir / f"eval_{label}.json")
         if d is None:
@@ -38,13 +56,42 @@ def sim_table(results_dir: Path) -> str:
             continue
         any_row = True
         r = d["rates_mean"]
+        ret = d.get("retention", {})
+        acq = d.get("acquisition", {})
+        suc = d.get("success", {})
+        ret_cell = (f"**{ret['rate']:.1%}** [{ret['ci_low']:.0%}, {ret['ci_high']:.0%}] "
+                    f"({ret['successes']}/{ret['trials']})" if ret else "n/a")
+
+        delta = "baseline"
+        if base is not None and label != "base" and ret and base.get("retention"):
+            b = base["retention"]
+            cmp = two_proportion_test(b["successes"], b["trials"],
+                                      ret["successes"], ret["trials"])
+            verdict = "**significant**" if cmp["significant"] else "not significant"
+            delta = (f"{cmp['diff']:+.1%} [{cmp['ci_low']:+.0%}, {cmp['ci_high']:+.0%}], "
+                     f"p={cmp['p_value']:.2f}, {verdict}")
         rows.append(
-            f"| {name} | **{d['success_mean']:.1%}** +/- {d['success_std']:.1%} "
-            f"| {r['grasp_slip']:.1%} | {r['grabbed_nothing']:.1%} "
-            f"| {r['missed_cup']:.1%} | {d['lift_mean']:.1%} "
-            f"| {d['mode_balance_mean']:.2f} |")
+            f"| {name} | {ret_cell} | {delta} "
+            f"| {acq.get('rate', float('nan')):.1%} "
+            f"| {suc.get('rate', float('nan')):.1%} "
+            f"| {r['grasp_slip']:.1%} | {r['grabbed_nothing']:.1%} |")
     if not any_row:
         return "_No sim results yet. Run `scripts/eval_all.sh`._"
+
+    rows += ["", "Real arm, for reference only: retention 64% (16/25), acquisition 83% (25/30). "
+             "The sim is not required to match it; both methods face the same sim."]
+    if base is not None and base.get("retention", {}).get("trials"):
+        b = base["retention"]
+        acq_rate = base["acquisition"]["rate"] or 1.0
+        rows += ["", "**Power.** Episodes per arm needed to resolve a retention gain, "
+                 f"at the baseline's {b['rate']:.0%} and an acquisition rate of {acq_rate:.0%}:",
+                 "", "| effect | lifted episodes per arm | total episodes per arm |",
+                 "|---|---|---|"]
+        for eff in (0.10, 0.15, 0.20):
+            n = required_trials(b["rate"], eff)
+            rows.append(f"| +{eff:.0%} retention | {n} | ~{round(n / acq_rate)} |")
+        rows += ["", "Read the interval, not the point estimate. A method whose interval "
+                 "overlaps the baseline's has not been shown to help."]
     return "\n".join(rows)
 
 
@@ -97,7 +144,11 @@ def build(results_dir: str = "results", runs_dir: str = "runs",
         "",
         sim_table(results_dir),
         "",
-        "## Real SO-ARM101 (operator-scored, tier A)",
+        "## Real SO-ARM101 (reference only, operator-scored, tier A)",
+        "",
+        "Not the deliverable. The comparison is decided by the sim table above; "
+        "20 trials per arm cannot separate two methods. This is a spot-check that "
+        "a sim result has not broken something obvious on hardware.",
         "",
         real_table(runs_dir),
         "",

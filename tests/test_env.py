@@ -181,3 +181,37 @@ def test_potential_is_monotone_along_a_competent_trajectory():
     seated = potential(sc, st, cfg)
     assert far < carrying < seated
     assert seated == pytest.approx(cfg.progress_weight)
+
+
+def test_opening_the_jaws_away_from_the_cup_is_missed_cup_not_slip():
+    """The distinction the headline metric depends on.
+
+    Carrying a cube to the wrong place and letting go is a planning error. Only
+    losing it while the jaws are still commanded shut is a grip failure. Scoring
+    the first as the second inflates the slip rate with misplacements, which
+    would then be credited to whichever method improved placement.
+    """
+    sc, st = _fresh()
+    sc.held = "right"
+    sc.heights["right"] = 0.12
+    for _ in range(3):
+        rules.update(st, sc, action_grip=19.0)
+    sc.positions["right"] = np.array([0.25, -0.05, 0.12])   # not over the cup
+    sc.held = None
+    rules.update(st, sc, action_grip=60.0)                  # jaws commanded OPEN
+    assert st.slips == 0
+    assert st.deliberate_releases == 1
+    assert rules.classify(st) == rules.MISSED_CUP
+
+
+def test_losing_the_cube_with_jaws_shut_is_still_a_slip():
+    sc, st = _fresh()
+    sc.held = "right"
+    sc.heights["right"] = 0.12
+    for _ in range(3):
+        rules.update(st, sc, action_grip=19.0)
+    sc.positions["right"] = np.array([0.25, -0.05, 0.12])
+    sc.held = None
+    rules.update(st, sc, action_grip=19.0)                  # jaws still SHUT
+    assert st.slips == 1 and st.deliberate_releases == 0
+    assert rules.classify(st) == rules.GRASP_SLIP

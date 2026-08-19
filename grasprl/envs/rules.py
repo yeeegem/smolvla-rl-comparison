@@ -54,7 +54,8 @@ class EpisodeState:
     ever_lifted: bool = False        # did a gripped cube ever clear lift_height
     held: str | None = None          # cube currently gripped
     lifted_side: str | None = None   # cube that was lifted (first one wins)
-    slips: int = 0                   # gripped+lifted -> released outside the cup
+    slips: int = 0                   # escaped while the jaws were still commanded shut
+    deliberate_releases: int = 0     # jaws opened away from the cup -> missed_cup
     cup_knocked: bool = False
     success: bool = False
     newly_successful: bool = False   # set for exactly one tick, for the reward
@@ -84,12 +85,27 @@ def update(state: EpisodeState, scene, action_grip: float) -> EpisodeState:
                 state.events.append(f"lifted:{held}@{state.ticks}")
             state.ever_lifted = True
     elif state.held is not None and state.ever_lifted:
-        # Was holding a lifted cube, now holding nothing: either a deliberate
-        # release over the cup or a slip. `cube_in_cup` cannot decide this yet --
-        # at the instant the jaws open the cube is still in the air, so testing
-        # it here would score every successful placement as a slip. Judge by
-        # *where* the release happened instead.
-        if not _released_over_cup(scene, state.held):
+        # A lifted cube just left the gripper. Three different things look
+        # identical here and must not be conflated, because `grasp_slip` is this
+        # repo's headline metric:
+        #
+        #  * released over the cup      -> a placement, success or not;
+        #  * released with the jaws OPENING, away from the cup -> the policy
+        #    let go on purpose in the wrong place. That is `missed_cup`, a
+        #    planning error, not a grip failure;
+        #  * escaped while the jaws were still commanded SHUT -> a real slip.
+        #
+        # The gripper command is what separates the last two, and getting this
+        # wrong inflates the slip rate with misplacements -- which would then be
+        # credited to whichever RL method happened to improve placement.
+        # `cube_in_cup` cannot be used here: at the instant the jaws open the
+        # cube is still in the air, so it would score every success as a drop.
+        if _released_over_cup(scene, state.held):
+            pass
+        elif action_grip >= state.grip_closed_below:
+            state.deliberate_releases += 1
+            state.events.append(f"released:{state.held}@{state.ticks}")
+        else:
             state.slips += 1
             state.events.append(f"slip:{state.held}@{state.ticks}")
     state.held = held
@@ -129,8 +145,9 @@ def classify(state: EpisodeState) -> str:
     1. it worked;
     2. it never even tried;
     3. it closed on empty space (the co-trained policy's other failure);
-    4. it had the cube up and dropped it -- the failure this repo targets;
-    5. it carried the cube but put it in the wrong place;
+    4. it had the cube up and lost it while still gripping -- the failure this
+       repo targets;
+    5. it carried the cube and let go somewhere that was not the cup;
     6. it tipped the cup;
     7. nothing identifiable happened before the clock ran out.
 
@@ -146,7 +163,7 @@ def classify(state: EpisodeState) -> str:
         return GRABBED_NOTHING
     if state.slips > 0:
         return GRASP_SLIP
-    if state.ever_lifted:
+    if state.deliberate_releases > 0 or state.ever_lifted:
         return MISSED_CUP
     if state.cup_knocked:
         return KNOCKED_CUP_OVER

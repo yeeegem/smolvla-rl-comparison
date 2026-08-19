@@ -2,8 +2,13 @@
 # Score all three arms on the HELD-OUT seed range and render the comparison.
 set -euo pipefail
 export MUJOCO_GL=egl PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-EPISODES="${EPISODES:-100}"
-SEEDS="${SEEDS:-0 1 2}"
+# Episodes are i.i.d. and seeds are pooled, so this is the only knob that
+# matters for statistical power. Retention is measured on only the ~34% of
+# episodes that lift a cube, so 200 episodes yields ~68 retention samples and
+# can only resolve a retention gain of roughly 20 points. See the power table
+# in results/comparison.md before reading a difference as an effect.
+EPISODES="${EPISODES:-200}"
+SEEDS="${SEEDS:-0}"
 BASE="${BASE:-checkpoints/base_smolvla}"
 PPO="${PPO:-runs/ppo_seed0/checkpoints/last/pretrained_model}"
 CRITIC="${CRITIC:-runs/gaf_critic}"

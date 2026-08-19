@@ -15,8 +15,11 @@ the identical frozen checkpoint:
 | training cost | hours of on-policy rollout | one offline rollout pass + minutes of regression |
 | source | [`smolvla-ppo-cube-stacking`](../smolvla-ppo-cube-stacking) | [arXiv 2607.02092v1](https://arxiv.org/abs/2607.02092) |
 
-Both are scored in the same simulator, with the same failure taxonomy the real arm is scored
-with, and then on the real arm.
+**The deliverable is the sim comparison.** Both methods start from the same frozen checkpoint,
+train and are scored in the same simulator, against the same sim baseline, with the same failure
+taxonomy. Real-arm numbers appear throughout as **reference only**: they are why grasp slip is the
+failure being targeted, and the repo carries a working real-arm harness if you want to spot-check
+a result, but the comparison is decided in sim and the sim is not required to reproduce them.
 
 ---
 
@@ -71,11 +74,15 @@ them moved it, because none of them is the problem. Meanwhile the *same* checkpo
 in sim under the weld oracle**, with a median reach error of 1.2 cm -- its perception and
 positioning transfer; what does not transfer is millimetre-scale placement.
 
+This is a fact about the sim, not a defect to be fixed before proceeding. It sets the acquisition
+rate, and therefore how many episodes the comparison needs; it does not stop the sim being a fair
+testbed, because both methods face exactly the same handicap.
+
 So the two failure modes are separated, and only one of them is abstracted:
 
 * **Acquisition** -- did the cube end up between the jaws. Abstracted. `Scene.capture()` cancels
   the *across-the-jaws* component of the placement error when the gripper closes within
-  `grasp.capture_radius`, calibrated so the sim's grasp rate matches the real arm's 83%.
+  `grasp.capture_radius`, set to leave enough episodes reaching the retention stage to measure it.
 * **Retention** -- did it stay there. **Real physics**, untouched. Grasp height, cube yaw,
   gripper command and carry acceleration all still decide the outcome, and those are exactly the
   variables a policy can learn to fix.
@@ -84,40 +91,78 @@ So the two failure modes are separated, and only one of them is abstracted:
 grasp. Close high on the cube and the jaws still catch its top edge. Meet a corner instead of a
 face and it still squirts out. Command the gripper two units too open and it still drops.
 
-**This is the load-bearing assumption of the sim half of the comparison, and it is why the real-arm
-runs are not optional.** Set `grasp.capture_radius: null` for the unassisted grasp, or
-`grasp.mode: weld` for the original abstraction, and re-run any result you want to check.
+Set `grasp.capture_radius: null` for a fully unassisted grasp, or `grasp.mode: weld` for the
+original abstraction, and re-run any result you want to check against a different substrate.
 
 ---
 
-## Status
+## Status: baseline chosen, both methods ready to run
 
-Everything below runs, and 49 tests pass. **The calibration gate has not been passed yet** and
-that is the next thing to do.
+The 12-cell sweep is done (40 episodes per cell) and the baseline is frozen in
+`configs/scene.yaml`: `capture_radius: 0.02`, `gripper_forcerange: 1.4`, `pad_friction: 0.6`.
+
+The sim does not have to reproduce the real arm; it has to be a testbed where a method can show
+an effect and where that effect can be measured. `grasprl.sim.calibrate` scores cells on exactly
+that, as `headroom x sample_yield`:
+
+* **headroom** peaks when baseline retention is mid-range. Pinned near 0 or 1 there is nowhere for
+  a method to move, and a proportion is least sensitive at its extremes.
+* **sample yield** is the acquisition rate, because retention is only observed on episodes that
+  get a cube off the table. It sets how many usable samples an episode budget buys.
+
+The chosen cell is the best on that criterion, and it is also the cell closest to the real arm,
+so nothing was traded away:
+
+| | acquisition | retention |
+|---|---|---|
+| **chosen sim baseline** | **0.34 to 0.45** | **0.37 to 0.51** |
+| real arm (reference) | 0.83 | 0.64 |
+| weld ceiling (reference) | n/a | grasp cannot fail |
+
+The two stages behave very differently, which is worth knowing before reading any result:
+
+* **Retention responds cleanly** to `gripper_forcerange`, monotonically, across two independent
+  rows of the grid. It is the grasp-slip question and the headline metric.
+* **Acquisition is close to inert.** Every `capture_radius` from 20 mm to 45 mm gives 0.30 to
+  0.50, all within noise at 40 episodes. The limit is that the policy often never commands the
+  gripper shut near a cube on sim images, which is a near-miss no tolerance knob can catch. See
+  the section above for the measurement.
+
+**The consequence that matters: statistical power.** Retention is measured on roughly a third of
+episodes, so a 200-episode run yields only about 68 retention samples.
+
+| effect | retention samples/arm | **total episodes/arm** |
+|---|---|---|
+| +10 pp retention | 382 | ~1120 |
+| +15 pp | 172 | ~510 |
+| +20 pp | 97 | ~285 |
+
+At 200 episodes an observed +15 pp swing is **not** significant (p = 0.08). Every rate in
+`results/comparison.md` therefore carries a 95% Wilson interval, and each method is compared to
+the baseline with a two-proportion test. Read the interval, not the point estimate.
+
+**The live risk.** With roughly two thirds of episodes ending in `grabbed_nothing`, PPO's reward
+is dominated by "attempt a grasp at all" rather than "hold on to it". A method could win on
+acquisition rather than retention. The evaluator and the report lead with retention and show
+acquisition beside it, so a win of the wrong kind is visible rather than buried in a success rate.
+
+**One correction found while watching rollouts.** The classifier was scoring any release away from
+the cup as `grasp_slip`, including deliberate releases a centimetre short of the rim. Those are
+`missed_cup`, a planning error rather than a grip failure, and counting them as slip would have
+inflated the headline metric and credited it to whichever method improved placement.
+`rules.update` now separates them by the gripper command: jaws opening means a deliberate release,
+jaws still shut means a genuine slip. Both cases are pinned by tests.
 
 | | state |
 |---|---|
 | contact grasp, pads, masks, weld fallback | built, tested, verified against the MJCF |
 | env, failure taxonomy, potential-based reward | built, tested |
-| Arm A: Flow-SDE PPO | built; trains end to end at ~70 ticks/s (a 400k-tick run is ~1.6 h) |
+| baseline selection | **done**, frozen in `configs/scene.yaml` |
+| Arm A: Flow-SDE PPO | built; ~70 ticks/s, a 400k-tick run is ~1.6 h |
 | Arm B: Guided Action Flow | built; collect to critic to guided sampling verified end to end |
-| sim evaluator, report, plots, real-arm harness | built |
-| **calibration to the real 53/30/13 profile** | **not yet achieved** |
-
-Best 20-episode probe so far, against a target of 53% success / 30% slip / 13% grabbed-nothing:
-
-```
-capture_radius  torque |  succ  lift  slip  noth
-        0.020    1.40  |  0.25  0.45  0.20  0.55
-```
-
-Acquisition is the gap: the sim grasps about 50% of the time against the real arm's 83%, so
-`grabbed_nothing` is roughly four times too high, and the RL methods would be scored partly on a
-failure mode that is a sim artifact. `scripts/calibrate_slip.sh` sweeps a wider grid with 40
-episodes per cell and **refuses to write a configuration that does not get close**, so run it and
-read the gate before starting either RL method. If the gate cannot be met, widening
-`--capture` past 0.045 or raising `grasp.pad_half_width` are the levers with the most headroom,
-and `grasp.mode: weld` is always available as the upper-bound ablation.
+| sim evaluator with Wilson intervals, rollout viewer, report | built |
+| real-arm harness (reference, optional) | built |
+| the two RL runs | **not started** |
 
 ## Quickstart
 
@@ -129,19 +174,34 @@ MUJOCO_GL=egl uv run --extra dev pytest tests/ -q
 MUJOCO_GL=egl uv run python scripts/tune_jaw_pads.py --out scene_views/grasp.png
 ```
 
-### 1. Calibrate the sim to the real failure profile -- do this first
+### 1. Choose the sim baseline -- already done, re-run only to change it
 
-Both methods are scored in this simulator, so it has to fail the way the real arm fails before
-either of them runs. Re-calibrating afterwards would invalidate the comparison.
+The chosen cell is frozen in `configs/scene.yaml`. Both methods are scored in this simulator, so
+re-running this after seeing a result would invalidate the comparison.
 
 ```bash
-bash scripts/calibrate_slip.sh                # ~40 min; writes configs/scene.yaml
+bash scripts/calibrate_slip.sh                # ~40 min; rewrites configs/scene.yaml
 ```
 
-Sweeps `capture_radius` (moves `grabbed_nothing`) against `gripper_forcerange` (moves
-`grasp_slip`), scores each cell by L1 distance to the real arm's measured
-**53% success / 30% slip / 13% grabbed-nothing**, and **refuses to write** a cell that does not
-get close. If the gate fails, stop and fix the sim rather than running RL in it.
+Sweeps `capture_radius` against `gripper_forcerange` and scores each cell on **fitness as a
+testbed**, `headroom x sample_yield`: baseline retention away from the floor and ceiling so a
+method has room to move, and an acquisition rate high enough that enough episodes reach the
+retention stage to measure it. It refuses to write a cell where retention is pinned at an extreme
+or almost nothing is ever lifted, because neither method could show an effect there. The real-arm
+profile is printed alongside as reference, not as a target.
+
+### 1b. Look at the baseline before spending GPU on it
+
+```bash
+bash scripts/watch.sh base                    # -> results/rollout_base.mp4
+EPISODES=8 SEED=42 bash scripts/watch.sh base
+```
+
+Every frame carries the commanded gripper value and the jaw gap it produces, the distance from
+the grasp point to the nearer cube against the capture radius, whether both pads are loaded and
+with how much force, and the cube height. That is enough to tell a near-miss from a mistimed
+close from a genuine slip without guessing. The same command works for `ppo` and `gaf` once
+those exist, so the three can be watched side by side.
 
 ### 2. Arm A -- Flow-SDE PPO (~2.2 h)
 
@@ -161,10 +221,15 @@ bash scripts/train_gaf.sh                     # collect -> fit critic -> tune on
 bash scripts/eval_all.sh                      # held-out seeds, all three arms -> results/comparison.md
 ```
 
-### 5. On the real SO-ARM101 (~20 trials per arm)
+### 5. Optional: spot-check on the real SO-ARM101
+
+**Not part of the deliverable.** The comparison is decided by step 4. This exists if you want to
+see whether a sim result survives contact with the hardware; 20 trials cannot settle a difference
+between two methods (a gap under ~15 pp is not significant at that size), but it can tell you
+whether a method has broken something obvious.
 
 Edit `configs/eval_real.yaml` for your port and cameras. All three arms run through one control
-loop at the same decision cadence as the sim, so the comparison is like-for-like.
+loop at the same decision cadence as the sim.
 
 ```bash
 uv run python -m grasprl.real.run --method base \
@@ -267,12 +332,19 @@ Everything is vendored rather than imported across repos, so this one stands alo
 
 ## Reading the result honestly
 
-* The sim comparison is a comparison **under the calibrated contact model**, with acquisition
-  abstracted. It is where the statistics are; it is not the ground truth.
-* 20 real trials per arm is noisy: a difference under about 15 pp is not significant.
-* Success rate alone cannot answer "did the grasp get better" -- a method that grasps more often
-  but holds no better, and one that holds better but attempts fewer grasps, post the same number.
-  That is why every table reports `lift rate`, `grasp_slip` and `grabbed_nothing` beside it.
-* A null result for either method is a result. The PPO machinery here produced a **negative**
-  result in the repo it came from (35.2% → 31.2%, statistically identical); the difference now is
-  that the reward penalises the exact failure being targeted and the sim can finally express it.
+* **The comparison is the sim comparison.** Both methods start from the same frozen checkpoint,
+  train and are scored in the same sim against the same baseline. Real-arm numbers are reference
+  context for why grasp slip is the target, not a bar the sim has to clear.
+* **Report retention, not success rate.** Success mixes the two stages of the task, and is
+  dominated by acquisition, which barely responds to anything. Retention is the grasp-slip
+  question.
+* **Read the interval, not the point estimate.** Retention is measured on about a third of
+  episodes. At 200 episodes per arm its 95% interval is roughly +/- 11 points, so only a very
+  large effect is visible. Size the run against the power table above before believing a gap.
+* **A method can win for the wrong reason.** There is far more headroom in acquisition than in
+  retention. If an arm improves success mostly by attempting more grasps while retention stays
+  flat, say so: that is not evidence about grasp stability.
+* **A null result for either method is a result.** The PPO machinery here produced a negative
+  result in the repo it came from (35.2% to 31.2%, statistically identical). The difference now is
+  that the reward penalises the exact failure being targeted and the sim can express it, but that
+  is a reason to run the experiment, not to expect a particular answer.

@@ -166,7 +166,7 @@ grasp:
   # So the interesting band is 0.7 - 1.1 Nm. grasprl.sim.calibrate sweeps it
   # against the FROZEN POLICY to match the real arm's 53% / 30% slip profile.
   # null keeps the MJCF value.
-  gripper_forcerange: 0.9
+  gripper_forcerange: 1.4
 
   # Acquisition tolerance (m), the knob that separates the two failure modes.
   #
@@ -180,7 +180,7 @@ grasp:
   #
   # Calibrated against the real arm's 83% grasp rate (53% success + 30% slip).
   # null disables it entirely, giving a fully unassisted contact grasp.
-  capture_radius: 0.030
+  capture_radius: 0.02
   capture_grip_below: 30.0    # only while the gripper is actually closing
 
   # Gripper command (RANGE_0_100) the pads are positioned for: the expert's
