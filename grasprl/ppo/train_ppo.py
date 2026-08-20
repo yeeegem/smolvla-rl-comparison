@@ -77,6 +77,7 @@ import torch
 from grasprl.envs.pickplace_env import DEFAULT_TASK, EnvConfig
 from grasprl.envs.reward import RewardConfig
 from grasprl.envs.vec_env import VecPickPlaceEnv
+from grasprl.eval.stats import wilson
 from grasprl.policy.heads import build_value_head
 from grasprl.policy.loader import (
     load_smolvla,
@@ -341,6 +342,7 @@ class Trainer:
         # Recomputing here makes the ratio exactly 1 at the start of the update
         # by construction, whatever the batch shapes are. Pinned by
         # tests/test_flow_sde.py::test_replay_survives_the_conditions_training_actually_uses.
+        skipped = 0
         behaviour_lp, gaps = [], []
         with torch.no_grad():
             for idx in parts:
@@ -366,7 +368,33 @@ class Trainer:
                 # across the K inner steps of one decision.
                 mb_adv = adv_t[idx].unsqueeze(1).expand_as(out.log_prob)
                 log_ratio = out.log_prob - behaviour_lp[part_i]
-                ratio = log_ratio.exp()
+
+                # Check the trust region BEFORE spending a backward pass on this
+                # minibatch, and bail without contributing anything if it is out.
+                #
+                # The guard used to run after backward(), which let a blown-up
+                # minibatch poison the accumulated gradient before anyone looked.
+                # That is not hypothetical here: one action is a 10 x 6 block
+                # scored through a 10-step chain whose per-step std falls to
+                # 0.003, so log-probabilities are sums over 60 sensitive
+                # coordinates and the ratio is correspondingly explosive.
+                # Measured on a 32-update run: approx_kl of 22.3 (log_ratio ~ 52,
+                # a ratio of e^52) reaching pg_loss = 918, twice more above 100.
+                # Clipping does not save it -- the surrogate takes
+                # max(-adv*ratio, -adv*clip(ratio)), which selects the UNclipped
+                # branch whenever the advantage is negative.
+                with torch.no_grad():
+                    probe_kl = float(((log_ratio.exp() - 1) - log_ratio).mean()
+                                      / n_scored)
+                if cfg.target_kl and probe_kl > cfg.target_kl:
+                    skipped += 1
+                    stop = True
+                    break
+
+                # Belt and braces: even inside the trust region, exponentiating a
+                # 60-coordinate sum can overflow fp32. Bounded well above
+                # anything clip_coef admits, so it never binds in normal use.
+                ratio = log_ratio.clamp(-10.0, 10.0).exp()
                 pg = torch.max(
                     -mb_adv * ratio,
                     -mb_adv * ratio.clamp(1 - cfg.clip_coef, 1 + cfg.clip_coef),
@@ -431,6 +459,7 @@ class Trainer:
         # disagree, in nats of summed log-probability. Not used in the loss;
         # logged so the artifact that once throttled this run stays visible.
         out_logs["replay_lp_gap"] = float(np.mean(gaps)) if gaps else float("nan")
+        out_logs["skipped_minibatches"] = skipped
         out_logs["optimizer_steps"] = n_batches // cfg.grad_accum
         return out_logs
 
@@ -496,6 +525,7 @@ def train(
     slip_hist: list[float] = []
     lifted_hist: list[float] = []
     running = np.zeros(tr.n_envs, dtype=np.float32)
+    best_score, best_retention, best_update = -1.0, 0.0, 0
     t_start = time.time()
 
     while env_steps < cfg.total_env_steps:
@@ -558,12 +588,40 @@ def train(
                 f"| v {stats['value_loss']:7.3f} | kl_ref {stats['kl_reference']:.4f} "
                 f"| kl {stats['approx_kl']:.4f} | kl0 {stats['first_minibatch_kl']:.5f} "
                 f"| lpgap {stats['replay_lp_gap']:.2f} "
+                f"| skip {stats['skipped_minibatches']} "
                 f"| mb {stats['minibatches']:>2} | clip {stats['clip_fraction']:.2f} "
                 f"| {row['steps_per_sec']:.1f} ticks/s",
                 flush=True,
             )
         if update % cfg.save_every == 0:
             tr.save(out / "checkpoints" / f"{update:06d}")
+
+        # Keep the best policy, not just the most recent one. This run's
+        # characteristic failure is to improve fast and then run away from the
+        # imitation prior and collapse: retention reached ~0.70 by update 6 and
+        # was 0.00 by update 13. Without this, `last/` is the wreckage.
+        #
+        # Scored on retention (success among episodes that lifted a cube), which
+        # is the metric the comparison reports, and only once enough episodes
+        # have accumulated for the rolling window to mean anything.
+        if len(returns_hist) >= 20:
+            n_lift = int(sum(lifted_hist[-20:]))
+            n_succ = int(sum(success_hist[-20:]))
+            # Scored on the WILSON LOWER BOUND of retention, not the raw ratio.
+            # The raw ratio has no sample size in it, so a window containing a
+            # single lifted episode that happened to succeed scores 1.000 and
+            # beats a genuinely better policy measured over seven. That is not
+            # hypothetical: it happened, and 1/1 at update 32 overwrote 4/7 at
+            # update 13. The lower bound ranks 4/7 (0.250) above 1/1 (0.207),
+            # which is the ordering that reflects what is actually known.
+            score = wilson(n_succ, n_lift).lo if n_lift else 0.0
+            if score > best_score:
+                best_score, best_update = score, update
+                best_retention = n_succ / n_lift
+                tr.save(out / "checkpoints" / "best", keep_last=10**9)
+                print(f"       new best: retention {n_succ}/{n_lift} "
+                      f"= {best_retention:.3f} (lower bound {score:.3f}) "
+                      f"at update {update} -> checkpoints/best", flush=True)
 
     tr.save(out / "checkpoints" / "last")
     tr.close()
@@ -572,6 +630,9 @@ def train(
         "env_steps": env_steps,
         "episodes": len(returns_hist),
         "final_success_rate": float(np.mean(success_hist[-20:])) if success_hist else 0.0,
+        "best_retention": best_retention,
+        "best_score": best_score,
+        "best_update": best_update,
         "final_slip_rate": float(np.mean(slip_hist[-20:])) if slip_hist else 0.0,
         "wall_clock_s": time.time() - t_start,
     }

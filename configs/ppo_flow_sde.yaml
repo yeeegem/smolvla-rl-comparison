@@ -116,9 +116,29 @@ ppo:
   # drift here is not yet known; watch `kl0` (must be ~0) and `mb` (should reach
   # 32) in the log and tighten it if updates start running away.
   target_kl: 0.03
+  # Restored from 1.0 after the artifact fix. With the ratio finally meaningful,
+  # the policy improved fast (retention 0.23 -> ~0.70 over updates 2-9) and then
+  # ran away: kl_ref went 0.05 -> 0.90, eighteen times its starting value, and by
+  # update 13 the policy had destroyed itself -- still grasping (lift 0.40) but
+  # dropping everything (retention 0.00).
+  #
+  # Back to 1.0. Raising it to 3.0 did hold kl_ref down (0.17-0.30, no runaway)
+  # but also flattened the gains, and it turned out to be treating the wrong
+  # cause: that run still showed pg_loss spikes of 918, 119 and 117 with
+  # approx_kl up to 22, i.e. importance ratios around e^52 landing directly in
+  # the surrogate. The trust-region guard only ran AFTER backward(), so those
+  # minibatches had already poisoned the accumulated gradient.
+  #
+  # The earlier collapse at update 12-13 coincided with exactly such a spike
+  # (approx_kl 1.90), so it was plausibly a blown-up update rather than gradual
+  # drift away from the prior. Trainer.update now checks the trust region before
+  # spending a backward pass and skips the minibatch entirely, so 1.0 is the
+  # right setting to retest: it is the one that produced retention 0.23 -> 0.70.
   kl_coef: 1.0
   value_head_lr: 3.0e-4
   normalize_advantages: true
   seed: 0
   log_every: 1
-  save_every: 10
+  # Every 5, not 10: the peak above was at update 6-8 and a 10-update cadence
+  # would have saved only the collapsed policy at update 10.
+  save_every: 5

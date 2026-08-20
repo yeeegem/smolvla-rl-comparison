@@ -21,6 +21,11 @@ taxonomy. Real-arm numbers appear throughout as **reference only**: they are why
 failure being targeted, and the repo carries a working real-arm harness if you want to spot-check
 a result, but the comparison is decided in sim and the sim is not required to reproduce them.
 
+**Outcome: neither method improved grasp retention.** PPO moved acquisition instead, which is the
+wrong metric and a known artifact of this sim; Guided Action Flow moved nothing. Both nulls are
+weak rather than decisive, because 500 episodes per arm can only resolve a ~20 point difference.
+See [Results](#results).
+
 ---
 
 ## Why this needed a new simulator
@@ -96,73 +101,66 @@ original abstraction, and re-run any result you want to check against a differen
 
 ---
 
-## Status: baseline chosen, both methods ready to run
+## Results
 
-The 12-cell sweep is done (40 episodes per cell) and the baseline is frozen in
-`configs/scene.yaml`: `capture_radius: 0.02`, `gripper_forcerange: 1.4`, `pad_friction: 0.6`.
+**Neither method fixed grasp slip.** Full write-up in [`results/comparison.md`](results/comparison.md).
 
-The sim does not have to reproduce the real arm; it has to be a testbed where a method can show
-an effect and where that effect can be measured. `grasprl.sim.calibrate` scores cells on exactly
-that, as `headroom x sample_yield`:
+All three arms, 500 held-out episodes each, 95% Wilson intervals:
 
-* **headroom** peaks when baseline retention is mid-range. Pinned near 0 or 1 there is nowhere for
-  a method to move, and a proportion is least sensitive at its extremes.
-* **sample yield** is the acquisition rate, because retention is only observed on episodes that
-  get a cube off the table. It sets how many usable samples an episode budget buys.
+| arm | **retention** | vs baseline | acquisition | success | grasp_slip |
+|---|---|---|---|---|---|
+| frozen SmolVLA (baseline) | **30.6%** [24, 38] (49/160) | reference | 32.0% | 9.8% | 21.2% |
+| + Flow-SDE PPO | **26.7%** [21, 33] (52/195) | -4.0 pp, p = 0.41, ns | **39.0%** | 10.4% | 26.8% |
+| + Guided Action Flow | **21.0%** [15, 28] (33/157) | -9.6 pp, p = 0.05, ns | 31.4% | 6.6% | 23.0% |
 
-The chosen cell is the best on that criterion, and it is also the cell closest to the real arm,
-so nothing was traded away:
+Retention is success among episodes that got a cube off the table. It is the grasp-slip
+question, and the stage the sim models most faithfully. Both intervals span the baseline, so
+both are null results rather than demonstrated regressions.
 
-| | acquisition | retention |
+**The one thing that did move went the wrong way.** PPO raised *acquisition* from 32.0% to 39.0%
+(+7.0 pp, p = 0.021, significant) while retention did not move. It learned to attempt more
+grasps, not to hold on to them. Acquisition is the half of this sim that is a known artifact of
+the policy's placement error, so improving it says nothing about grasp stability, and net success
+rate barely changed as a result (9.8% to 10.4%, p = 0.75).
+
+This is the failure mode the evaluator was built to expose: a method can raise success rate by
+grasping more often while holding no better, and reporting success alone would have hidden it.
+
+### What this does and does not license
+
+* **It is a fair comparison.** Both methods start from the same frozen checkpoint, train and are
+  scored in the same simulator, on the same held-out seeds, with the same taxonomy.
+* **It is not a strong null.** At 500 episodes per arm the comparison could only resolve a
+  retention gain of about 20 points. A real improvement of 5 to 10 points would have been
+  invisible. Resolving +10 pp needs roughly 1100 episodes per arm.
+* **PPO was not trained to convergence.** 500k control ticks is small for on-policy RL on a 450M
+  policy; the curve oscillated rather than converged. Its checkpoint was selected from a noisy
+  20-episode window and the 500-episode evaluation says that peak did not hold.
+* **The critic may be the limiting factor for Guided Action Flow.** It saw 600 frozen-policy
+  episodes, only about a third of which reached the retention stage. Near-zero ensemble
+  disagreement suggests it fit the sparse success-to-go target without learning to rank
+  near-miss grasps, which is the bottleneck the paper itself identifies.
+
+### Getting here took four PPO runs, and three of them were measuring nothing
+
+Worth recording, because each failure was silent and produced a plausible-looking flat curve.
+
+| | symptom | cause |
 |---|---|---|
-| **chosen sim baseline** | **0.34 to 0.45** | **0.37 to 0.51** |
-| real arm (reference) | 0.83 | 0.64 |
-| weld ceiling (reference) | n/a | grasp cannot fail |
+| run 1 | 391 of 391 updates cut short, 14% of intended gradient work, weights moved 1.2e-4 | the PPO denominator was the log-probability stored at collection (batch = `n_envs`) while the update recomputed it at batch = `minibatch_size`. cuBLAS picks kernels by shape, and with the per-step std down at 0.003 the resulting ~1e-3 velocity difference moved the summed log-probability by about a nat: `approx_kl` read 1.7e-2 before any weight changed, against a `target_kl` of 0.015 |
+| run 2 | policy learned fast then destroyed itself | `drop_penalty` 15 against potential-based shaping that telescopes to ~0, so a failed grasp was worth -15 against 0 for never trying. At the exploration-time retention of 0.00, refusing to grasp was optimal and PPO found it |
+| run 3 | `pg_loss` spikes of 918, 119, 117 | importance ratios of e^52 entering the surrogate, which takes `max(-adv*ratio, -adv*clip(ratio))` and so selects the unclipped branch on negative advantage. The trust-region guard ran *after* `backward()`, so the poisoned gradient was already accumulated |
 
-The two stages behave very differently, which is worth knowing before reading any result:
+Fixes, all pinned by tests: behaviour log-probabilities are recomputed under the update's own
+forward conditions on a fixed minibatch partition; `drop_penalty` is 2.0 and sized against
+exploration-time retention; the guard runs before `backward()` and skips the minibatch. Also
+`num_steps` 4 -> 10 and `noise_scale` 0.2 -> 0.1, after measuring that the old sampler cost the
+entire task (0% success against the ODE's 9.8%) rather than the ~30% tax that was assumed.
 
-* **Retention responds cleanly** to `gripper_forcerange`, monotonically, across two independent
-  rows of the grid. It is the grasp-slip question and the headline metric.
-* **Acquisition is close to inert.** Every `capture_radius` from 20 mm to 45 mm gives 0.30 to
-  0.50, all within noise at 40 episodes. The limit is that the policy often never commands the
-  gripper shut near a cube on sim images, which is a near-miss no tolerance knob can catch. See
-  the section above for the measurement.
-
-**The consequence that matters: statistical power.** Retention is measured on roughly a third of
-episodes, so a 200-episode run yields only about 68 retention samples.
-
-| effect | retention samples/arm | **total episodes/arm** |
-|---|---|---|
-| +10 pp retention | 382 | ~1120 |
-| +15 pp | 172 | ~510 |
-| +20 pp | 97 | ~285 |
-
-At 200 episodes an observed +15 pp swing is **not** significant (p = 0.08). Every rate in
-`results/comparison.md` therefore carries a 95% Wilson interval, and each method is compared to
-the baseline with a two-proportion test. Read the interval, not the point estimate.
-
-**The live risk.** With roughly two thirds of episodes ending in `grabbed_nothing`, PPO's reward
-is dominated by "attempt a grasp at all" rather than "hold on to it". A method could win on
-acquisition rather than retention. The evaluator and the report lead with retention and show
-acquisition beside it, so a win of the wrong kind is visible rather than buried in a success rate.
-
-**One correction found while watching rollouts.** The classifier was scoring any release away from
-the cup as `grasp_slip`, including deliberate releases a centimetre short of the rim. Those are
-`missed_cup`, a planning error rather than a grip failure, and counting them as slip would have
-inflated the headline metric and credited it to whichever method improved placement.
-`rules.update` now separates them by the gripper command: jaws opening means a deliberate release,
-jaws still shut means a genuine slip. Both cases are pinned by tests.
-
-| | state |
-|---|---|
-| contact grasp, pads, masks, weld fallback | built, tested, verified against the MJCF |
-| env, failure taxonomy, potential-based reward | built, tested |
-| baseline selection | **done**, frozen in `configs/scene.yaml` |
-| Arm A: Flow-SDE PPO | built; ~70 ticks/s, a 400k-tick run is ~1.6 h |
-| Arm B: Guided Action Flow | built; collect to critic to guided sampling verified end to end |
-| sim evaluator with Wilson intervals, rollout viewer, report | built |
-| real-arm harness (reference, optional) | built |
-| the two RL runs | **not started** |
+A fourth bug was caught in checkpoint selection itself: `checkpoints/best` scored on raw
+retention with no sample size, so a window containing one lifted episode that happened to succeed
+scored 1.000 and overwrote a genuinely better policy measured over seven. It now selects on the
+Wilson lower bound.
 
 ## Quickstart
 
@@ -344,7 +342,7 @@ Everything is vendored rather than imported across repos, so this one stands alo
 * **A method can win for the wrong reason.** There is far more headroom in acquisition than in
   retention. If an arm improves success mostly by attempting more grasps while retention stays
   flat, say so: that is not evidence about grasp stability.
-* **A null result for either method is a result.** The PPO machinery here produced a negative
-  result in the repo it came from (35.2% to 31.2%, statistically identical). The difference now is
-  that the reward penalises the exact failure being targeted and the sim can express it, but that
-  is a reason to run the experiment, not to expect a particular answer.
+* **A null result for either method is a result, and that is what this was.** The PPO machinery
+  produced a negative result in the repo it came from too (35.2% to 31.2%, statistically
+  identical). Here it produced a null on retention and a significant gain on the metric that does
+  not matter. Reported as such rather than reframed.

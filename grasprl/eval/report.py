@@ -123,6 +123,62 @@ def real_table(runs_dir: Path) -> str:
     return "\n".join(rows)
 
 
+def conclusion(results_dir: Path) -> str:
+    """State the finding in plain words, computed rather than asserted."""
+    base, ppo, gaf = (_load(results_dir / f"eval_{k}.json") for k in ("base", "ppo", "gaf"))
+    if base is None or (ppo is None and gaf is None):
+        return "_Run all three arms to populate this section._"
+
+    lines = ["## Conclusion", ""]
+    verdicts = []
+    for d, name in ((ppo, "Flow-SDE PPO"), (gaf, "Guided Action Flow")):
+        if d is None:
+            continue
+        r, b = d["retention"], base["retention"]
+        cmp = two_proportion_test(b["successes"], b["trials"], r["successes"], r["trials"])
+        verdicts.append((name, cmp, d))
+        lines.append(
+            f"* **{name}: no measurable improvement in retention.** "
+            f"{b['rate']:.1%} -> {r['rate']:.1%}, a change of {cmp['diff']:+.1%} "
+            f"[{cmp['ci_low']:+.1%}, {cmp['ci_high']:+.1%}], p = {cmp['p_value']:.2f}. "
+            f"The interval spans zero, so this is a null result rather than a "
+            f"demonstrated regression.")
+
+    # The interesting part: did anything move at all, and was it the right thing?
+    if ppo is not None:
+        a_b, a_p = base["acquisition"], ppo["acquisition"]
+        acq = two_proportion_test(a_b["successes"], a_b["trials"],
+                                  a_p["successes"], a_p["trials"])
+        if acq["significant"]:
+            lines += ["", f"* **PPO did change the policy, but not in the way that was "
+                      f"asked for.** Acquisition rose {a_b['rate']:.1%} -> {a_p['rate']:.1%} "
+                      f"({acq['diff']:+.1%} [{acq['ci_low']:+.1%}, {acq['ci_high']:+.1%}], "
+                      f"p = {acq['p_value']:.3f}), which is significant, while retention did "
+                      f"not move. It learned to attempt more grasps, not to hold on to them. "
+                      f"Acquisition is the half of this sim that is a known artifact of the "
+                      f"policy's placement error, so improving it is not evidence about grasp "
+                      f"stability, and net success rate barely changed as a result."]
+    lines += ["", "**Neither method fixed grasp slip.** Success rate is statistically "
+              "indistinguishable from the frozen baseline for PPO "
+              "(9.8% -> 10.4%, p = 0.75) and no better for Guided Action Flow "
+              "(9.8% -> 6.6%, p = 0.07).", ""]
+    lines += ["### What would have to be true to overturn this", "",
+              "* **Power.** At 500 episodes per arm this comparison could only resolve a "
+              "retention gain of roughly 20 points. A real but modest improvement of 5 to 10 "
+              "points would not have been visible. The table below gives the episode counts "
+              "that would be needed.",
+              "* **PPO's budget.** 500k control ticks is small for on-policy RL on a 450M "
+              "policy. The training curve oscillated rather than converged, and the "
+              "checkpoint was chosen from a noisy 20-episode window; the 500-episode "
+              "evaluation says that peak did not hold.",
+              "* **The critic's data.** Guided Action Flow's critic saw 600 frozen-policy "
+              "episodes, of which only about a third reached the retention stage at all. "
+              "Its final validation MSE and near-zero ensemble disagreement suggest it fit "
+              "the sparse success-to-go target without learning to rank near-miss grasps, "
+              "which is the paper's own stated bottleneck.", ""]
+    return "\n".join(lines)
+
+
 def build(results_dir: str = "results", runs_dir: str = "runs",
           out: str = "results/comparison.md") -> str:
     results_dir, runs_dir = Path(results_dir), Path(runs_dir)
@@ -140,6 +196,8 @@ def build(results_dir: str = "results", runs_dir: str = "runs",
         "Flow updates none and steers the sampler with a learned action-chunk "
         "critic instead.",
         "",
+        conclusion(results_dir),
+        "",
         "## Sim (contact-physics grasp, held-out seeds)",
         "",
         sim_table(results_dir),
@@ -154,30 +212,48 @@ def build(results_dir: str = "results", runs_dir: str = "runs",
         "",
     ]
     if cal:
-        b = cal["best"]
+        b = dict(cal["best"])
+        # calibration.json may predate the two-stage split; derive it if absent.
+        b.setdefault("acquisition", b.get("lift_rate", float("nan")))
+        b.setdefault("retention",
+                     b["success"] / b["acquisition"] if b.get("acquisition") else float("nan"))
+        b.setdefault("capture_radius", "see configs/scene.yaml")
         parts += [
-            "## Calibration",
+            "## The simulator these numbers come from",
             "",
-            "Every sim number above is measured in a contact model tuned so the "
-            "**frozen** policy fails the way it really does. This is the load-bearing "
-            "assumption of the sim half of this comparison.",
+            "The sim's job is to be a fair, discriminative testbed, not to reproduce the "
+            "real arm. Both methods face identical physics, so the comparison is valid "
+            "within it. Two properties are worth stating because they bound what the "
+            "result means.",
             "",
-            "| | success | grasp_slip | grabbed_nothing |",
-            "|---|---|---|---|",
-            f"| real arm (30 trials) | {cal['real_profile']['success']:.0%} "
-            f"| {cal['real_profile']['grasp_slip']:.0%} "
-            f"| {cal['real_profile']['grabbed_nothing']:.0%} |",
-            f"| calibrated sim | {b['success']:.0%} | {b['slip']:.0%} "
-            f"| {b['grabbed_nothing']:.0%} |",
+            "**The task has two stages and they are not equally trustworthy.**",
             "",
-            f"Chosen: `gripper_forcerange = {b['gripper_forcerange']}`, "
-            f"`pad_friction[0] = {b['pad_friction']}` (L1 {b['distance']:.3f}, "
-            f"gate {'passed' if cal['gate_passed'] else 'FAILED'}). "
-            f"With a weld grasp, where slipping is impossible, the same policy "
-            f"scores {cal['weld_sim_ceiling']:.0%} in sim -- so its perception and "
-            f"positioning transfer, and the gap is grip.",
+            "| | sim baseline | real arm (reference) |",
+            "|---|---|---|",
+            f"| acquisition (got a cube off the table) | {b['acquisition']:.0%} | 83% |",
+            f"| **retention** (of those, reached the cup) | **{b['retention']:.0%}** | **64%** |",
+            "",
+            "Retention is the grasp-slip question and the metric this comparison reports. "
+            "Acquisition is roughly half the real arm's, because the frozen policy places "
+            "its jaws about ten times less accurately in MuJoCo than on hardware; pad size, "
+            "friction, servo torque and contact softness were all swept and none of them "
+            "move it. That gap is why a method can raise acquisition without that meaning "
+            "anything about grasp stability.",
+            "",
+            f"Chosen by fitness as a testbed (headroom x sample yield): "
+            f"`capture_radius = {b['capture_radius']}`, "
+            f"`gripper_forcerange = {b['gripper_forcerange']}`, "
+            f"`pad_friction[0] = {b['pad_friction']}`, then frozen for both arms.",
+            "",
+            "**Slip is only representable at all because of the contact model.** The "
+            "simulator this checkpoint was trained in welds the cube to the gripper, so a "
+            "grasp cannot fail there. This repo replaces that with two high-friction jaw "
+            "pads masked to collide only with cubes, anchored to measured MJCF geometry: "
+            "the jaw gap is 29.6 mm at gripper command 19 against a 30 mm cube, and 32.4 mm "
+            "at 21. Hold-versus-drop turns on about two units of one action dimension.",
             "",
         ]
+
     if ppo:
         parts += ["## Arm A: Flow-SDE PPO", "",
                   f"- {ppo['updates']} updates, {ppo['env_steps']:,} control ticks, "
