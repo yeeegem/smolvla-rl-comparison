@@ -1,0 +1,46 @@
+{
+  "task": "Pick up a red cube and put it in the blue cup",
+  "checkpoint": "checkpoints/base_smolvla",
+  "sampler": {
+    "num_steps": 10,
+    "noise_scale": 0.1,
+    "learn_noise": false,
+    "score_all_coords": false,
+    "expert_layers_trained": null
+  },
+  "env": {
+    "n_envs": 4,
+    "n_exec": 10,
+    "max_ticks": 300,
+    "domain_randomize": true
+  },
+  "reward": {
+    "progress_weight": 3.0,
+    "distance_scale": 0.1,
+    "success_bonus": 100.0,
+    "drop_penalty": 2.0,
+    "time_penalty": 0.01,
+    "knock_penalty": 5.0
+  },
+  "ppo": {
+    "total_env_steps": 500000,
+    "rollout_steps": 32,
+    "epochs": 2,
+    "minibatch_size": 8,
+    "grad_accum": 4,
+    "lr": 1e-05,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_coef": 0.1,
+    "vf_coef": 0.5,
+    "ent_coef": 0.0,
+    "max_grad_norm": 1.0,
+    "target_kl": 0.015,
+    "kl_coef": 5.0,
+    "value_head_lr": 0.0003,
+    "normalize_advantages": true,
+    "seed": 0,
+    "log_every": 1,
+    "save_every": 10
+  }
+}

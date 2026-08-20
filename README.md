@@ -13,7 +13,7 @@ the identical frozen checkpoint:
 | where the improvement lives | 99.8M updated policy parameters | a 4-layer MLP critic, policy untouched |
 | what runs at inference | the fine-tuned policy | the **same frozen policy**, steered mid-denoise |
 | training cost | hours of on-policy rollout | one offline rollout pass + minutes of regression |
-| source | [`smolvla-ppo-cube-stacking`](../smolvla-ppo-cube-stacking) | [arXiv 2607.02092v1](https://arxiv.org/abs/2607.02092) |
+| source | Flow-SDE PPO, ported from an earlier unpublished project | [arXiv 2607.02092v1](https://arxiv.org/abs/2607.02092) |
 
 **The deliverable is the sim comparison.** Both methods start from the same frozen checkpoint,
 train and are scored in the same simulator, against the same sim baseline, with the same failure
@@ -30,7 +30,9 @@ See [Results](#results).
 
 ## Why this needed a new simulator
 
-The checkpoint comes from `sim2real-soarm-benchmark`, which trained it on 1000 MuJoCo episodes
+The checkpoint comes from
+[`sim2real-soarm-benchmark`](https://github.com/yeeegem/sim2real-soarm-benchmark), which trained
+it on 1000 MuJoCo episodes
 plus 100 real ones. That sim holds the cube with a **weld**: `Scene.attach()` fixes the cube to
 the gripper with an `mjEQ_WELD` equality, and the whole arm is given collision mask 0 so nothing
 ever touches anything. It is a good abstraction for recording demonstrations -- and it makes the
@@ -201,11 +203,17 @@ with how much force, and the cube height. That is enough to tell a near-miss fro
 close from a genuine slip without guessing. The same command works for `ppo` and `gaf` once
 those exist, so the three can be watched side by side.
 
-### 2. Arm A -- Flow-SDE PPO (~2.2 h)
+### 2. Arm A -- Flow-SDE PPO (~3.7 h)
 
 ```bash
 bash scripts/train_ppo.sh 0                   # or: seeds 0 1 2
+STEPS=100000 bash scripts/train_ppo.sh 0      # shorter run; STEPS overrides the config
 ```
+
+500k control ticks at ~38 ticks/s. The curve oscillates rather than converges, so the run keeps
+`checkpoints/best`, selected on the Wilson lower bound of rolling retention, and that is the
+checkpoint to evaluate. Watch `kl0` (must stay 0.00000, it is the replay sanity check) and `mb`
+(minibatches actually run, out of 32).
 
 ### 3. Arm B -- Guided Action Flow (~2 h)
 
@@ -216,7 +224,16 @@ bash scripts/train_gaf.sh                     # collect -> fit critic -> tune on
 ### 4. Head-to-head
 
 ```bash
-bash scripts/eval_all.sh                      # held-out seeds, all three arms -> results/comparison.md
+EPISODES=500 bash scripts/eval_all.sh         # held-out seeds, all three arms
+```
+
+Writes [`results/comparison.md`](results/comparison.md) with Wilson intervals, a two-proportion
+test against the baseline, and the power table. Evaluate PPO's **best** checkpoint, not its last:
+
+```bash
+MUJOCO_GL=egl uv run python -m grasprl.eval.evaluate \
+    --method ppo --checkpoint runs/ppo_seed0/checkpoints/best/pretrained_model \
+    --label ppo --episodes 500 --split heldout
 ```
 
 ### 5. Optional: spot-check on the real SO-ARM101
@@ -265,9 +282,12 @@ One env step is one policy decision (`n_exec` actions executed); reward, GAE and
 live there, while the PPO ratio is formed **per inner denoise step** for K times finer clipping.
 The action expert and its four projections train; SigLIP and SmolLM2 stay frozen.
 
-Reward is potential-based, with `drop_penalty` raised to 15 so that a lifted-then-dropped cube is
-worse than one never lifted -- the term that makes this run about grasp stability rather than
-grasp frequency.
+Reward is potential-based, with a small `drop_penalty` of 2.0 so that a lifted-then-dropped cube
+is worse than one never lifted, without making grasping unattractive. It has to be small: the
+shaping telescopes to zero over a grasp-carry-drop episode, so the penalty is the entire return
+of a failed grasp, and at 15 it made refusing to grasp the optimal policy. Sized against
+*exploration-time* retention, not the evaluation-time figure. The full arithmetic is in
+`configs/ppo_flow_sde.yaml`.
 
 ### Arm B: Guided Action Flow -- `grasprl/gaf/`
 
@@ -291,20 +311,29 @@ Two deliberate departures from the paper, both documented in `grasprl/gaf/critic
 
 ---
 
-## The three traps, and the tests that pin them
+## Silent failure modes, and the tests that pin them
 
-Each of these produces a plausible-looking number rather than an error, which is why each has a test.
+Every one of these produces a plausible-looking number rather than an error. That is the whole
+problem: a flat training curve looks the same whether the method does not work or the measurement
+is broken. Three of the four PPO runs here were the latter (see the table in
+[Results](#getting-here-took-four-ppo-runs-and-three-of-them-were-measuring-nothing)).
 
-| trap | why it is silent | test |
+| trap | what it looks like | pinned by |
 |---|---|---|
-| **The SDE drift correction subtracts.** The chain runs backwards in time; a forward-time sign anti-cancels the diffusion. | Losses look healthy. Cost a factor of 7 in the source repo. | `test_sde_preserves_the_ode_marginals`, `test_sampler_uses_the_reverse_time_sign` |
-| **The guidance term subtracts too**, for the same reason: `a_hat = x - t*v`, so lowering `v` along the gradient *raises* `a_hat` along it. | Guidance silently walks downhill and just reports a worse policy. | `test_guidance_increases_the_critic_value` |
-| **KL is measured per coordinate.** One decision is a 10×6 block through K steps, so summed KLs run ~100x above PPO conventions. | A stock `target_kl = 0.01` early-stops every update after ~5 of 64 minibatches. | config comments; `kl_reference` and `approx_kl` are divided by `n_scored`, the ratio never is |
+| **The SDE drift correction subtracts.** The chain runs backwards in time, so a forward-time sign anti-cancels the diffusion. | Losses look healthy while the policy quietly gets worse. Worth a factor of 7 where this came from. | `test_sde_preserves_the_ode_marginals`, `test_sampler_uses_the_reverse_time_sign` |
+| **The guidance term subtracts too**, for the same reason: `a_hat = x - t*v`, so lowering `v` along the critic gradient *raises* `a_hat` along it. | Guidance walks downhill and reports a worse policy. | `test_guidance_increases_the_critic_value` |
+| **The importance ratio is not batch-shape invariant.** Collection runs at batch `n_envs`, the update at batch `minibatch_size`; cuBLAS picks kernels by shape and the per-step std falls to 0.003, so a ~1e-3 velocity difference moves the summed log-probability by about a nat. | `approx_kl` reads 1.7e-2 before any weight changes, the trust-region guard fires on noise, and 100% of updates are cut short. | `test_batch_shape_changes_the_forward_pass`, `test_recomputed_behaviour_logprob_gives_a_unit_ratio` |
+| **KL is measured per coordinate.** One decision is a 10x6 block through K steps, so summed KLs run ~100x above PPO conventions. | A stock `target_kl = 0.01` early-stops every update after a handful of minibatches. | `kl_reference` and `approx_kl` are divided by `n_scored`; the ratio never is |
+| **Potential-based shaping telescopes to zero.** A grasp that is carried and then dropped earns no net shaping, so `drop_penalty` is the entire return of a failed grasp. | Sized against evaluation-time retention rather than exploration-time retention, it makes refusing to grasp optimal, and PPO finds that. | the arithmetic is in `configs/ppo_flow_sde.yaml`; `test_a_slip_is_penalised_and_a_success_rewarded` |
+| **A ratio can explode before the guard looks.** The surrogate takes `max(-adv*ratio, -adv*clip(ratio))`, which selects the *unclipped* branch on negative advantage. | `pg_loss` of 918 from a ratio of e^52, applied to the weights because the guard ran after `backward()`. | the guard now runs before `backward()` and skips the minibatch; `log_ratio` is clamped |
+| **Selecting a checkpoint on a ratio with no sample size.** | A window with one lifted episode that happened to succeed scores 1.000 and overwrites a better policy measured over seven. | selection is on the Wilson lower bound (`grasprl/eval/stats.py`) |
+| **A release away from the cup is not always a slip.** Opening the jaws a centimetre short of the rim is `missed_cup`, a planning error. | Counting it as slip inflates the headline metric and credits it to whichever method improved placement. | `test_opening_the_jaws_away_from_the_cup_is_missed_cup_not_slip`, `test_losing_the_cube_with_jaws_shut_is_still_a_slip` |
 
-Plus: the critic reads only SmolVLA's 6 physical action dims, never its 26 padding dims; the
-train/val split is by **episode**, never by chunk; and guidance hyperparameters are chosen on a
-validation seed range and reported once on a disjoint held-out range -- the paper's own headline
-caution is a +10.0 pp validation gain that was worth +2.5 pp held out.
+Plus, on the measurement side: the critic reads only SmolVLA's 6 physical action dims and never
+its 26 padding dims; the critic's train/val split is by **episode**, never by chunk; seeds are
+pooled rather than averaged because episodes are i.i.d.; and guidance hyperparameters are chosen
+on a validation seed range and reported once on a disjoint held-out range, the paper's own
+headline caution being a +10.0 pp validation gain worth +2.5 pp held out.
 
 ```bash
 MUJOCO_GL=egl uv run --extra dev pytest tests/ -q      # 49 tests
@@ -321,7 +350,7 @@ grasprl/
   policy/    smolvla_flow_sde.py (the SDE sampler), actor.py (one interface per arm), heads, loader
   ppo/       train_ppo.py                      Arm A
   gaf/       collect, critic, train_critic, guided_sampler, sweep      Arm B
-  eval/      evaluate.py, report.py, plots.py
+  eval/      evaluate.py, stats.py (Wilson intervals, power), report.py, plots.py, video.py
   real/      run.py, harness.py, infer.py, metrics.py   operator-scored, same CSV schema as sim2real
 configs/     scene.yaml  randomization.yaml  ppo_flow_sde.yaml  gaf.yaml  eval_real.yaml
 ```
@@ -346,3 +375,21 @@ Everything is vendored rather than imported across repos, so this one stands alo
   produced a negative result in the repo it came from too (35.2% to 31.2%, statistically
   identical). Here it produced a null on retention and a significant gain on the metric that does
   not matter. Reported as such rather than reframed.
+
+## Credits and licensing
+
+* **SO-ARM101 robot model** (`assets/so101/`) is vendored from
+  [TheRobotStudio/SO-ARM100](https://github.com/TheRobotStudio/SO-ARM100), Apache License 2.0.
+  The upstream licence is retained at `assets/so101/LICENSE` and the MJCF is unmodified except
+  for the two contact pads this repo adds at runtime, in `grasprl/sim/scene.py`.
+* **Base checkpoint** is a SmolVLA fine-tune from
+  [`sim2real-soarm-benchmark`](https://github.com/yeeegem/sim2real-soarm-benchmark);
+  provenance and its measured real-arm baseline are recorded in
+  `checkpoints/base_smolvla/PROVENANCE.md` when you fetch it.
+* **SmolVLA** and the training/inference stack are
+  [LeRobot](https://github.com/huggingface/lerobot), Apache License 2.0.
+* **Guided Action Flow** is implemented from
+  [arXiv:2607.02092v1](https://arxiv.org/abs/2607.02092); the two deliberate departures from
+  the paper are documented in `grasprl/gaf/critic.py`.
+
+This repository does not yet carry a top-level licence.

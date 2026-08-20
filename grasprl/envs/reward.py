@@ -2,7 +2,7 @@
 
 Shaping is potential-based (Ng, Harada & Russell 1999): every dense term enters
 only as ``gamma * Phi(s') - Phi(s)``, which provably leaves the optimal policy
-unchanged. The sibling ``smolvla-ppo-cube-stacking`` repo learned this the
+unchanged. An earlier unpublished project of ours learned this the
 expensive way -- with a raw progress bonus, episode return climbed while success
 *halved*, because the policy farmed the shaping instead of finishing the task.
 

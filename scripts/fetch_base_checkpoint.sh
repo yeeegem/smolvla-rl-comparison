@@ -8,7 +8,10 @@
 # or deleted, this comparison must not silently change meaning.
 set -euo pipefail
 
-SRC="${SRC:-/home/vasili/dev/sim2real-soarm-benchmark/runs/smolvla_cotrain/checkpoints/020000/pretrained_model}"
+# Machine-specific default: the sibling checkout this checkpoint was trained in
+# (github.com/yeeegem/sim2real-soarm-benchmark). Override SRC to point at your
+# own copy of runs/smolvla_cotrain/checkpoints/020000/pretrained_model.
+SRC="${SRC:-../sim2real-soarm-benchmark/runs/smolvla_cotrain/checkpoints/020000/pretrained_model}"
 DST="${DST:-checkpoints/base_smolvla}"
 
 if [[ ! -d "$SRC" ]]; then

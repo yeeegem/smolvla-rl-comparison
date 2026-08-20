@@ -1,0 +1,108 @@
+{
+  "episodes_total": 500,
+  "success": {
+    "rate": 0.066,
+    "successes": 33,
+    "trials": 500,
+    "ci_low": 0.047378526359773875,
+    "ci_high": 0.0912394011608535
+  },
+  "acquisition": {
+    "rate": 0.314,
+    "successes": 157,
+    "trials": 500,
+    "ci_low": 0.27486785583609774,
+    "ci_high": 0.35596839881559983
+  },
+  "retention": {
+    "rate": 0.21019108280254778,
+    "successes": 33,
+    "trials": 157,
+    "ci_low": 0.15376583581314338,
+    "ci_high": 0.2804596389666726
+  },
+  "slip": {
+    "rate": 0.23,
+    "successes": 115,
+    "trials": 500,
+    "ci_low": 0.1952549251744704,
+    "ci_high": 0.26886221867476784
+  },
+  "success_mean": 0.066,
+  "success_std": 0.02193043740053981,
+  "acquisition_mean": 0.314,
+  "acquisition_std": 0.040550271489751044,
+  "retention_mean": 0.21019108280254778,
+  "retention_std": 0.0633469015767646,
+  "slip_mean": 0.23,
+  "slip_std": 0.036803646750148716,
+  "lift_mean": 0.314,
+  "grip_mean": 0.556,
+  "counts": {
+    "grabbed_nothing": 343,
+    "grasp_slip": 115,
+    "missed_cup": 9,
+    "knocked_cup_over": 0,
+    "collision_unsafe": 0,
+    "froze_no_attempt": 0,
+    "timeout": 0
+  },
+  "mode_balance_mean": 0.21337579617834396,
+  "rates_mean": {
+    "grabbed_nothing": 0.686,
+    "grasp_slip": 0.23,
+    "missed_cup": 0.018,
+    "knocked_cup_over": 0.0,
+    "collision_unsafe": 0.0,
+    "froze_no_attempt": 0.0,
+    "timeout": 0.0
+  },
+  "mean_ticks": 289.22,
+  "label": "gaf",
+  "method": "gaf",
+  "checkpoint": "checkpoints/base_smolvla",
+  "critic": "runs/gaf_critic",
+  "split": "heldout",
+  "seeds": [
+    0
+  ],
+  "episodes_per_seed": 500,
+  "n_exec": 10,
+  "domain_randomize": true,
+  "per_seed": [
+    {
+      "episodes": 500,
+      "n_success": 33,
+      "n_lifted": 157,
+      "n_gripped": 278,
+      "counts": {
+        "grabbed_nothing": 343,
+        "grasp_slip": 115,
+        "missed_cup": 9,
+        "knocked_cup_over": 0,
+        "collision_unsafe": 0,
+        "froze_no_attempt": 0,
+        "timeout": 0
+      },
+      "success_rate": 0.066,
+      "acquisition_rate": 0.314,
+      "retention_rate": 0.21019108280254778,
+      "lift_rate": 0.314,
+      "grip_rate": 0.556,
+      "rates": {
+        "grabbed_nothing": 0.686,
+        "grasp_slip": 0.23,
+        "missed_cup": 0.018,
+        "knocked_cup_over": 0.0,
+        "collision_unsafe": 0.0,
+        "froze_no_attempt": 0.0,
+        "timeout": 0.0
+      },
+      "mode_balance": 0.21337579617834396,
+      "n_chosen_left": 45,
+      "n_chosen": 157,
+      "mean_ticks": 289.22,
+      "mean_grasp_offset_m": 0.005169243995913074
+    }
+  ]
+}

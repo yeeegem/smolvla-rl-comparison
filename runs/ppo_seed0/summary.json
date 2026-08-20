@@ -1,0 +1,11 @@
+{
+  "updates": 391,
+  "env_steps": 500480,
+  "episodes": 1734,
+  "final_success_rate": 0.0,
+  "best_retention": 0.9090909090909091,
+  "best_score": 0.6226415635484043,
+  "best_update": 144,
+  "final_slip_rate": 0.2,
+  "wall_clock_s": 13179.806538581848
+}

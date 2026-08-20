@@ -1,0 +1,25 @@
+{
+  "rollouts": "recordings/gaf_rollouts",
+  "samples": 17445,
+  "episodes": 600,
+  "train_samples": 13898,
+  "val_samples": 3547,
+  "feature_dim": 992,
+  "config": {
+    "hidden": 768,
+    "depth": 4,
+    "ensemble": 3,
+    "epochs": 30,
+    "lr": 0.0003,
+    "weight_decay": 0.0001,
+    "batch_size": 256,
+    "gamma": 0.99,
+    "features": "state+pooled",
+    "use_task_feature": false,
+    "action_dim": 6,
+    "horizon": 10
+  },
+  "final_train_mse": 0.025588085942647675,
+  "final_val_mse": 0.016633523628115654,
+  "final_ensemble_std": 0.013076763600111008
+}

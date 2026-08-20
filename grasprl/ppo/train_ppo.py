@@ -2,7 +2,7 @@
 
 SmolVLA generates an action chunk by integrating a *deterministic* flow ODE, so
 it has no action density and nothing for PPO to clip. The fix, ported from
-``smolvla-ppo-cube-stacking``, is to replace that ODE with the marginal-
+an earlier unpublished project, is to replace that ODE with the marginal-
 preserving reverse-time SDE (see ``grasprl/policy/smolvla_flow_sde.py``): the
 sampler becomes a chain of Gaussian transitions with an exact log-density, while
 still drawing from the same distribution the imitation policy learned.

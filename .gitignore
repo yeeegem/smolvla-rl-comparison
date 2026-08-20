@@ -1,8 +1,29 @@
 .venv/
 __pycache__/
 *.pyc
-runs/
-recordings/
-results/
+
+# Large artefacts. Regenerate with the commands in the README.
+# 865 MB of SmolVLA weights, fetched from the source run.
 checkpoints/
+# Collected rollouts for the Guided Action Flow critic.
+recordings/
 scene_views/*.mp4
+
+# Training runs are large, but the evidence behind the reported numbers is not,
+# and a result nobody can check is not much of a result. Note the negations have
+# to re-include each directory level first: git will not descend into an
+# excluded directory to find a re-included file.
+runs/**
+!runs/*/
+!runs/*/metrics.jsonl
+!runs/*/summary.json
+!runs/*/history.json
+!runs/*/config.json
+
+# Same for results: publish the report and the numbers behind it, not the video.
+results/**
+!results/comparison.md
+!results/eval_*.json
+!results/calibration.json
+!results/gaf_sweep.json
+!results/*.png

@@ -1,0 +1,159 @@
+{
+  "checkpoint": "checkpoints/base_smolvla",
+  "episodes_per_cell": 40,
+  "seeds": [
+    0
+  ],
+  "real_profile": {
+    "success": 0.5333333333333333,
+    "grasp_slip": 0.3,
+    "grabbed_nothing": 0.13333333333333333
+  },
+  "weld_sim_ceiling": 0.8125,
+  "grid": [
+    {
+      "capture_radius": 0.02,
+      "gripper_forcerange": 0.7,
+      "pad_friction": 0.6,
+      "success": 0.1,
+      "slip": 0.325,
+      "grabbed_nothing": 0.575,
+      "lift_rate": 0.425,
+      "grip_rate": 0.575,
+      "distance": 0.9
+    },
+    {
+      "capture_radius": 0.02,
+      "gripper_forcerange": 0.9,
+      "pad_friction": 0.6,
+      "success": 0.1,
+      "slip": 0.275,
+      "grabbed_nothing": 0.625,
+      "lift_rate": 0.375,
+      "grip_rate": 0.6,
+      "distance": 0.95
+    },
+    {
+      "capture_radius": 0.02,
+      "gripper_forcerange": 1.1,
+      "pad_friction": 0.6,
+      "success": 0.15,
+      "slip": 0.175,
+      "grabbed_nothing": 0.65,
+      "lift_rate": 0.35,
+      "grip_rate": 0.675,
+      "distance": 1.025
+    },
+    {
+      "capture_radius": 0.02,
+      "gripper_forcerange": 1.4,
+      "pad_friction": 0.6,
+      "success": 0.225,
+      "slip": 0.2,
+      "grabbed_nothing": 0.55,
+      "lift_rate": 0.45,
+      "grip_rate": 0.625,
+      "distance": 0.8250000000000001
+    },
+    {
+      "capture_radius": 0.03,
+      "gripper_forcerange": 0.7,
+      "pad_friction": 0.6,
+      "success": 0.05,
+      "slip": 0.425,
+      "grabbed_nothing": 0.5,
+      "lift_rate": 0.5,
+      "grip_rate": 0.7,
+      "distance": 0.9750000000000001
+    },
+    {
+      "capture_radius": 0.03,
+      "gripper_forcerange": 0.9,
+      "pad_friction": 0.6,
+      "success": 0.125,
+      "slip": 0.25,
+      "grabbed_nothing": 0.6,
+      "lift_rate": 0.4,
+      "grip_rate": 0.65,
+      "distance": 0.925
+    },
+    {
+      "capture_radius": 0.03,
+      "gripper_forcerange": 1.1,
+      "pad_friction": 0.6,
+      "success": 0.175,
+      "slip": 0.125,
+      "grabbed_nothing": 0.7,
+      "lift_rate": 0.3,
+      "grip_rate": 0.55,
+      "distance": 1.1
+    },
+    {
+      "capture_radius": 0.03,
+      "gripper_forcerange": 1.4,
+      "pad_friction": 0.6,
+      "success": 0.2,
+      "slip": 0.15,
+      "grabbed_nothing": 0.65,
+      "lift_rate": 0.35,
+      "grip_rate": 0.65,
+      "distance": 1.0
+    },
+    {
+      "capture_radius": 0.045,
+      "gripper_forcerange": 0.7,
+      "pad_friction": 0.6,
+      "success": 0.125,
+      "slip": 0.3,
+      "grabbed_nothing": 0.575,
+      "lift_rate": 0.425,
+      "grip_rate": 0.675,
+      "distance": 0.85
+    },
+    {
+      "capture_radius": 0.045,
+      "gripper_forcerange": 0.9,
+      "pad_friction": 0.6,
+      "success": 0.05,
+      "slip": 0.4,
+      "grabbed_nothing": 0.55,
+      "lift_rate": 0.45,
+      "grip_rate": 0.625,
+      "distance": 1.0
+    },
+    {
+      "capture_radius": 0.045,
+      "gripper_forcerange": 1.1,
+      "pad_friction": 0.6,
+      "success": 0.075,
+      "slip": 0.25,
+      "grabbed_nothing": 0.625,
+      "lift_rate": 0.375,
+      "grip_rate": 0.6,
+      "distance": 1.0
+    },
+    {
+      "capture_radius": 0.045,
+      "gripper_forcerange": 1.4,
+      "pad_friction": 0.6,
+      "success": 0.1,
+      "slip": 0.275,
+      "grabbed_nothing": 0.625,
+      "lift_rate": 0.375,
+      "grip_rate": 0.65,
+      "distance": 0.95
+    }
+  ],
+  "best": {
+    "capture_radius": 0.02,
+    "gripper_forcerange": 1.4,
+    "pad_friction": 0.6,
+    "success": 0.225,
+    "slip": 0.2,
+    "grabbed_nothing": 0.55,
+    "lift_rate": 0.45,
+    "grip_rate": 0.625,
+    "distance": 0.8250000000000001
+  },
+  "gate_passed": false
+}

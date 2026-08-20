@@ -1,0 +1,8 @@
+{
+  "updates": 391,
+  "env_steps": 500480,
+  "episodes": 1723,
+  "final_success_rate": 0.05,
+  "final_slip_rate": 0.05,
+  "wall_clock_s": 9332.945583343506
+}

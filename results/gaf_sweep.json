@@ -1,0 +1,186 @@
+{
+  "critic": "runs/gaf_critic",
+  "checkpoint": "checkpoints/base_smolvla",
+  "split": "validation",
+  "episodes_per_seed": 50,
+  "seeds": [
+    0,
+    1
+  ],
+  "baseline": {
+    "success": 0.1,
+    "slip": 0.16
+  },
+  "grid": [
+    {
+      "beta": 1.0,
+      "alpha": 0.0,
+      "clip_norm": 0.5,
+      "success": 0.11,
+      "slip": 0.14,
+      "lift": 0.25,
+      "success_gain": 0.009999999999999995,
+      "slip_gain": 0.01999999999999999
+    },
+    {
+      "beta": 1.0,
+      "alpha": 0.0,
+      "clip_norm": 1.0,
+      "success": 0.1,
+      "slip": 0.17,
+      "lift": 0.32,
+      "success_gain": 0.0,
+      "slip_gain": -0.010000000000000009
+    },
+    {
+      "beta": 1.0,
+      "alpha": 10.0,
+      "clip_norm": 0.5,
+      "success": 0.11,
+      "slip": 0.21,
+      "lift": 0.33,
+      "success_gain": 0.009999999999999995,
+      "slip_gain": -0.04999999999999999
+    },
+    {
+      "beta": 1.0,
+      "alpha": 10.0,
+      "clip_norm": 1.0,
+      "success": 0.12,
+      "slip": 0.2,
+      "lift": 0.34,
+      "success_gain": 0.01999999999999999,
+      "slip_gain": -0.04000000000000001
+    },
+    {
+      "beta": 2.0,
+      "alpha": 0.0,
+      "clip_norm": 0.5,
+      "success": 0.1,
+      "slip": 0.14,
+      "lift": 0.25,
+      "success_gain": 0.0,
+      "slip_gain": 0.01999999999999999
+    },
+    {
+      "beta": 2.0,
+      "alpha": 0.0,
+      "clip_norm": 1.0,
+      "success": 0.11,
+      "slip": 0.2,
+      "lift": 0.31,
+      "success_gain": 0.009999999999999995,
+      "slip_gain": -0.04000000000000001
+    },
+    {
+      "beta": 2.0,
+      "alpha": 10.0,
+      "clip_norm": 0.5,
+      "success": 0.1,
+      "slip": 0.24,
+      "lift": 0.37,
+      "success_gain": 0.0,
+      "slip_gain": -0.07999999999999999
+    },
+    {
+      "beta": 2.0,
+      "alpha": 10.0,
+      "clip_norm": 1.0,
+      "success": 0.1,
+      "slip": 0.22,
+      "lift": 0.32,
+      "success_gain": 0.0,
+      "slip_gain": -0.06
+    },
+    {
+      "beta": 4.0,
+      "alpha": 0.0,
+      "clip_norm": 0.5,
+      "success": 0.08,
+      "slip": 0.18,
+      "lift": 0.27,
+      "success_gain": -0.020000000000000004,
+      "slip_gain": -0.01999999999999999
+    },
+    {
+      "beta": 4.0,
+      "alpha": 0.0,
+      "clip_norm": 1.0,
+      "success": 0.09,
+      "slip": 0.16,
+      "lift": 0.26,
+      "success_gain": -0.010000000000000009,
+      "slip_gain": 0.0
+    },
+    {
+      "beta": 4.0,
+      "alpha": 10.0,
+      "clip_norm": 0.5,
+      "success": 0.13,
+      "slip": 0.16,
+      "lift": 0.29,
+      "success_gain": 0.03,
+      "slip_gain": 0.0
+    },
+    {
+      "beta": 4.0,
+      "alpha": 10.0,
+      "clip_norm": 1.0,
+      "success": 0.1,
+      "slip": 0.16,
+      "lift": 0.27,
+      "success_gain": 0.0,
+      "slip_gain": 0.0
+    },
+    {
+      "beta": 8.0,
+      "alpha": 0.0,
+      "clip_norm": 0.5,
+      "success": 0.16,
+      "slip": 0.15,
+      "lift": 0.31,
+      "success_gain": 0.06,
+      "slip_gain": 0.010000000000000009
+    },
+    {
+      "beta": 8.0,
+      "alpha": 0.0,
+      "clip_norm": 1.0,
+      "success": 0.12,
+      "slip": 0.25,
+      "lift": 0.38,
+      "success_gain": 0.01999999999999999,
+      "slip_gain": -0.09
+    },
+    {
+      "beta": 8.0,
+      "alpha": 10.0,
+      "clip_norm": 0.5,
+      "success": 0.12,
+      "slip": 0.14,
+      "lift": 0.29,
+      "success_gain": 0.01999999999999999,
+      "slip_gain": 0.01999999999999999
+    },
+    {
+      "beta": 8.0,
+      "alpha": 10.0,
+      "clip_norm": 1.0,
+      "success": 0.12,
+      "slip": 0.14,
+      "lift": 0.28,
+      "success_gain": 0.01999999999999999,
+      "slip_gain": 0.01999999999999999
+    }
+  ],
+  "best": {
+    "beta": 8.0,
+    "alpha": 0.0,
+    "clip_norm": 0.5,
+    "success": 0.16,
+    "slip": 0.15,
+    "lift": 0.31,
+    "success_gain": 0.06,
+    "slip_gain": 0.010000000000000009
+  }
+}
